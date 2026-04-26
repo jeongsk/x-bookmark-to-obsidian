@@ -30,6 +30,10 @@ LOG_FILE = LOG_DIR / "native-host.log"
 X_FETCHER_PATH = Path(__file__).with_name("fetch_tweet.py")
 MAX_MESSAGE_BYTES = 1024 * 1024
 
+# In-memory URL index for O(1) duplicate detection
+_url_index: Dict[str, Path] = {}
+_index_loaded: bool = False
+
 
 def read_message() -> Optional[Dict[str, Any]]:
     try:
@@ -147,19 +151,39 @@ def normalize_url(url: str) -> str:
     return f"https://x.com/{match.group(1)}/status/{match.group(2)}"
 
 
-def detect_existing_note(url: str, output_dir: Path) -> Optional[Path]:
+def _load_url_index(output_dir: Path) -> None:
+    """Build the URL -> note path index by scanning the output directory once."""
+    global _url_index, _index_loaded
+    if _index_loaded:
+        return
+    _url_index.clear()
     if not output_dir.exists():
-        return None
-    needle = normalize_url(url)
+        _index_loaded = True
+        return
     for path in output_dir.glob("*.md"):
         try:
             text = path.read_text(encoding="utf-8", errors="ignore")
         except Exception:
             continue
         frontmatter = text[:2000]
-        if re.search(rf"^url:\s*[\"']?{re.escape(needle)}[\"']?\s*$", frontmatter, flags=re.MULTILINE):
-            return path
-    return None
+        m = re.search(r"^url:\s*[\"']?(https?://[^\"'>\s]+)[\"']?\s*$", frontmatter, flags=re.MULTILINE)
+        if m:
+            normalized = normalize_url(m.group(1))
+            if normalized:
+                _url_index[normalized] = path
+    _index_loaded = True
+    log_event("url_index_loaded", count=len(_url_index), dir=str(output_dir))
+
+
+def _index_note(url: str, path: Path) -> None:
+    """Incrementally add a saved note to the URL index."""
+    _url_index[normalize_url(url)] = path
+
+
+def detect_existing_note(url: str, output_dir: Path) -> Optional[Path]:
+    _load_url_index(output_dir)
+    normalized = normalize_url(url)
+    return _url_index.get(normalized)
 
 
 def format_author(author_name: str, handle: str) -> str:
@@ -390,6 +414,7 @@ def save_x_bookmark(payload: Dict[str, Any]) -> Dict[str, Any]:
         fallback_used=bool(fetch_error),
         fetch_status="fallback" if fetch_error else "success",
     )
+    _index_note(url, output_path)
     return {
         "success": True,
         "path": result["path"],
@@ -412,7 +437,7 @@ def main() -> None:
         if action == "ping":
             send_message({
                 "success": True,
-                "version": "2.4.0",
+                "version": "2.5.0",
                 "output_dir": DEFAULT_OUTPUT_DIR,
                 "x_fetcher": str(X_FETCHER_PATH),
             })
