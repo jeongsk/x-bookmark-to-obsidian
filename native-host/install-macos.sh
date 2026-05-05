@@ -13,7 +13,7 @@ FETCHER_PATH="$RUNTIME_DIR/fetch_tweet.py"
 MANIFEST_DIR="$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts"
 
 if ! command -v python3 >/dev/null 2>&1; then
-    echo "未检测到 python3，请先安装 Python 3 后再运行安装器。"
+    echo "python3를 찾을 수 없습니다. Python 3를 먼저 설치한 후 설치 프로그램을 실행하세요."
     exit 1
 fi
 
@@ -42,4 +42,4 @@ echo ""
 echo "Fixed extension ID:"
 echo "  $EXTENSION_ID"
 echo ""
-echo "Done! Restart Chrome for the changes to take effect."
+echo "완료! 변경 사항을 적용하려면 Chrome을 재시작하세요."

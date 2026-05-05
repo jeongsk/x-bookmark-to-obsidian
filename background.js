@@ -2,7 +2,7 @@ const NATIVE_HOST_NAME = "com.btl.file_writer";
 const DEFAULT_OUTPUT_DIR = "";
 const DEFAULT_TARGET_SYNC_COUNT = 80;
 const DEFAULT_SYNC_MAX_ROUNDS = 18;
-const INSTALL_HINT = "未完成本机安装，请先运行 install.command 后重试";
+const INSTALL_HINT = "로컬 설치가 완료되지 않았습니다. install.command를 먼저 실행한 후 다시 시도하세요.";
 const ACTIVE_RUN_STORAGE_KEY = "activeRunStatus";
 
 chrome.runtime.onInstalled.addListener(async () => {
@@ -29,7 +29,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       .catch((error) => {
         const failure = {
           ok: false,
-          error: error.message || "unknown error",
+          error: error.message || "알 수 없는 오류",
           timestamp: Date.now(),
         };
         chrome.storage.local.set({ lastResult: failure });
@@ -45,7 +45,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         const failure = {
           ok: false,
           timestamp: Date.now(),
-          error: error.message || "同步失败",
+          error: error.message || "동기화 실패",
         };
         await chrome.storage.local.set({
           lastSyncResult: failure,
@@ -63,7 +63,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         const failure = {
           ok: false,
           timestamp: Date.now(),
-          error: error.message || "清除失败",
+          error: error.message || "삭제 실패",
         };
         const state = await chrome.storage.local.get({ lastSyncResult: null });
         if (state.lastSyncResult) {
@@ -127,7 +127,7 @@ async function handleSaveBookmark(payload) {
   safePayload.output_dir = (syncState.obsidianOutputDir || DEFAULT_OUTPUT_DIR).trim();
 
   if (!safePayload.output_dir) {
-    throw new Error("请先在插件弹窗中设置 Obsidian 保存路径");
+    throw new Error("먼저 플러그인 팝업에서 Obsidian 저장 경로를 설정하세요.");
   }
 
   let result;
@@ -165,7 +165,7 @@ async function startBookmarkPageSync(options) {
   });
   const outputDir = String(syncState.obsidianOutputDir || "").trim();
   if (!outputDir) {
-    throw new Error("请先在插件弹窗中设置 Obsidian 保存路径");
+    throw new Error("먼저 플러그인 팝업에서 Obsidian 저장 경로를 설정하세요.");
   }
 
   const [tab] = await chrome.tabs.query({
@@ -173,12 +173,12 @@ async function startBookmarkPageSync(options) {
     currentWindow: true,
   });
   if (!tab?.id) {
-    throw new Error("未找到当前标签页");
+    throw new Error("현재 탭을 찾을 수 없습니다");
   }
 
   const url = String(tab.url || "");
   if (!/^https:\/\/(x|twitter)\.com\//.test(url)) {
-    throw new Error("请先切到 X 页面再执行同步");
+    throw new Error("먼저 X 페이지로 이동한 후 동기화를 실행하세요.");
   }
 
   const targetItems = sanitizeNumber(
@@ -206,7 +206,7 @@ async function startBookmarkPageSync(options) {
     const failedResult = {
       ok: false,
       timestamp: Date.now(),
-      error: response?.error || "同步失败",
+      error: response?.error || "동기화 실패",
       targetItems,
       estimatedMaxRounds,
     };
@@ -243,12 +243,12 @@ async function clearLastSyncedBookmarks() {
   const state = await chrome.storage.local.get({ lastSyncResult: null });
   const lastSyncResult = state.lastSyncResult;
   if (!lastSyncResult?.ok) {
-    throw new Error("没有可清除的批量同步结果");
+    throw new Error("삭제할 일괄 동기화 결과가 없습니다");
   }
 
   const pendingItems = normalizeClearItems(lastSyncResult.pendingClearItems || lastSyncResult.pendingClearUrls || []);
   if (pendingItems.length === 0) {
-    throw new Error("本轮没有待清除的成功书签");
+    throw new Error("이번 회차에 삭제 대기 중인 성공 북마크가 없습니다");
   }
 
   const [tab] = await chrome.tabs.query({
@@ -256,12 +256,12 @@ async function clearLastSyncedBookmarks() {
     currentWindow: true,
   });
   if (!tab?.id) {
-    throw new Error("未找到当前标签页");
+    throw new Error("현재 탭을 찾을 수 없습니다");
   }
 
   const url = String(tab.url || "");
   if (!/^https:\/\/(x|twitter)\.com\//.test(url)) {
-    throw new Error("请先切到 X 页面再执行清除");
+    throw new Error("먼저 X 페이지로 이동한 후 삭제를 실행하세요.");
   }
 
   let response;
@@ -278,7 +278,7 @@ async function clearLastSyncedBookmarks() {
   }
 
   if (!response?.success) {
-    throw new Error(response?.error || "清除失败");
+    throw new Error(response?.error || "삭제 실패");
   }
 
   const clearResult = {
@@ -302,10 +302,10 @@ async function clearLastSyncedBookmarks() {
 
 function validatePayload(payload) {
   if (!payload || typeof payload !== "object") {
-    throw new Error("missing payload");
+    throw new Error("페이로드 누락");
   }
   if (typeof payload.url !== "string" || !/^https:\/\/(x|twitter)\.com\/.+\/status\/\d+/.test(payload.url)) {
-    throw new Error("invalid tweet url");
+    throw new Error("유효하지 않은 트윗 URL");
   }
 }
 
@@ -404,9 +404,9 @@ function mapNativeHostError(error) {
 function mapTabMessageError(error) {
   const message = String(error?.message || error || "");
   if (message.includes("Receiving end does not exist")) {
-    return "当前页面尚未注入插件，请刷新 X 页面后重试";
+    return "현재 페이지에 플러그인이 주입되지 않았습니다. X 페이지를 새로고침한 후 다시 시도하세요.";
   }
-  return message || "无法连接当前页面";
+  return message || "현재 페이지에 연결할 수 없습니다";
 }
 
 function sanitizeNumber(value, min, max, fallback) {

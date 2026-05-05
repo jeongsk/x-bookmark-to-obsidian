@@ -100,7 +100,7 @@ def validate_directory_path(dir_path: str) -> Tuple[Optional[Path], Optional[str
 def pick_folder() -> Dict[str, Any]:
     try:
         proc = subprocess.run(
-            ["osascript", "-e", 'POSIX path of (choose folder with prompt "选择 Obsidian 保存目录")'],
+            ["osascript", "-e", 'POSIX path of (choose folder with prompt "Obsidian 저장 디렉토리 선택")'],
             capture_output=True,
             text=True,
             timeout=120,
@@ -237,11 +237,11 @@ def build_markdown(fetch_data: Optional[Dict[str, Any]], payload: Dict[str, Any]
         handle = tweet.get("screen_name") or fetch_data.get("username") or payload.get("author_handle", "")
         text = tweet.get("article", {}).get("full_text") or tweet.get("text") or payload.get("text") or ""
         metrics = {
-            "点赞": tweet.get("likes"),
-            "转发": tweet.get("retweets"),
-            "浏览": tweet.get("views"),
-            "回复": tweet.get("replies_count"),
-            "收藏": tweet.get("bookmarks"),
+            "좋아요": tweet.get("likes"),
+            "리트윗": tweet.get("retweets"),
+            "조회": tweet.get("views"),
+            "답글": tweet.get("replies_count"),
+            "북마크": tweet.get("bookmarks"),
         }
         media_lines = extract_media_lines(tweet.get("media", []) or [])
     else:
@@ -249,12 +249,12 @@ def build_markdown(fetch_data: Optional[Dict[str, Any]], payload: Dict[str, Any]
         modified = today
         author_name = payload.get("author_name", "")
         handle = payload.get("author_handle", "")
-        text = payload.get("text", "") or "抓取失败，先保留原始链接。"
+        text = payload.get("text", "") or "가져오기 실패, 원본 링크를 보존합니다."
         metrics = {
-            "点赞": (payload.get("metrics") or {}).get("likes"),
-            "转发": (payload.get("metrics") or {}).get("reposts"),
-            "浏览": (payload.get("metrics") or {}).get("views"),
-            "回复": (payload.get("metrics") or {}).get("replies"),
+            "좋아요": (payload.get("metrics") or {}).get("likes"),
+            "리트윗": (payload.get("metrics") or {}).get("reposts"),
+            "조회": (payload.get("metrics") or {}).get("views"),
+            "답글": (payload.get("metrics") or {}).get("replies"),
         }
         media_lines = []
 
@@ -270,31 +270,31 @@ def build_markdown(fetch_data: Optional[Dict[str, Any]], payload: Dict[str, Any]
         f"published: {published}",
         "source: X (Twitter)",
         "fetch_method: x_bookmark_helper",
-        f"创建时间: {today}",
-        f"修改时间: {modified}",
+        f"생성 시간: {today}",
+        f"수정 시간: {modified}",
         "---",
         f"# {title}",
         "",
-        "> [!INFO] 帖子信息",
-        f"> - 作者: {author_name or '@' + handle if handle else '未知作者'}",
-        f"> - 链接: {normalized_url}",
-        f"> - 收藏时间: {today}",
+        "> [!INFO] 게시글 정보",
+        f"> - 저자: {author_name or '@' + handle if handle else '알 수 없는 저자'}",
+        f"> - 링크: {normalized_url}",
+        f"> - 북마크 시간: {today}",
     ]
 
     if info_parts:
-        lines.append("> - 互动数据: " + " · ".join(info_parts))
+        lines.append("> - 인게이지먼트: " + " · ".join(info_parts))
 
     if fetch_error:
         lines.extend([
-            "> [!WARNING] 自动抓取降级",
-            f"> - 原因: {fetch_error}",
-            "> - 处理方式: 已先保存占位笔记，后续可用 Web Clipper Quick clip 补抓。",
+            "> [!WARNING] 자동 수집 폴백",
+            f"> - 사유: {fetch_error}",
+            "> - 처리 방식: 자리표시자 노트를 먼저 저장했습니다. 나중에 Web Clipper Quick clip으로 보완할 수 있습니다.",
         ])
 
-    lines.extend(["", "## 正文", "", text.strip() or "（无正文）"])
+    lines.extend(["", "## 본문", "", text.strip() or "(본문 없음)"])
 
     if media_lines:
-        lines.extend(["", "## 媒体", ""])
+        lines.extend(["", "## 미디어", ""])
         lines.extend(media_lines)
 
     return "\n".join(lines).strip() + "\n", title
@@ -315,7 +315,7 @@ def extract_media_lines(media_items: Any) -> list[str]:
                 lines.append(f"![]({thumbnail})")
             video_url = video.get("url")
             if video_url:
-                lines.append(f"[视频链接]({video_url})")
+                lines.append(f"[비디오 링크]({video_url})")
         return dedupe_lines(lines)
 
     if not isinstance(media_items, list):
@@ -376,7 +376,7 @@ def save_x_bookmark(payload: Dict[str, Any]) -> Dict[str, Any]:
     url = normalize_url(str(payload.get("url", "")))
     output_dir_raw = str(payload.get("output_dir", "") or DEFAULT_OUTPUT_DIR).strip()
     if not output_dir_raw:
-        return {"success": False, "error": "please configure obsidian output directory first"}
+        return {"success": False, "error": "Obsidian 저장 디렉토리를 먼저 설정하세요."}
     output_dir, dir_err = validate_directory_path(output_dir_raw)
     if dir_err:
         return {"success": False, "error": dir_err}

@@ -27,14 +27,14 @@
     if (message?.type === "START_BOOKMARK_PAGE_SYNC") {
       syncBookmarkTimeline(message.options || {})
         .then((result) => sendResponse({ success: true, result }))
-        .catch((error) => sendResponse({ success: false, error: error.message || "同步失败" }));
+        .catch((error) => sendResponse({ success: false, error: error.message || "동기화 실패" }));
       return true;
     }
 
     if (message?.type === "CLEAR_BOOKMARKS_BY_URLS") {
       clearBookmarksByUrls(message.options || {})
         .then((result) => sendResponse({ success: true, result }))
-        .catch((error) => sendResponse({ success: false, error: error.message || "清除失败" }));
+        .catch((error) => sendResponse({ success: false, error: error.message || "삭제 실패" }));
       return true;
     }
 
@@ -80,30 +80,30 @@
 
     const payload = extractTweetPayload(article);
     if (!payload?.url) {
-      showToast("未识别到帖子链接，已跳过", "error");
+      showToast("게시글 링크를 식별하지 못했습니다. 건너뜁니다.", "error");
       return;
     }
 
     try {
       const result = await savePayload(payload, { showStartToast: true });
       if (result?.deduped) {
-        showToast("这条帖子已经在 Obsidian 里了", "success");
+        showToast("이 게시글은 이미 Obsidian에 있습니다.", "success");
       } else if (result?.fallbackUsed) {
-        showToast("已保存占位笔记，可稍后手动补剪", "success");
+        showToast("자리표시자 노트가 저장되었습니다. 나중에 수동으로 보완할 수 있습니다.", "success");
       } else {
-        showToast("已保存到 Obsidian", "success");
+        showToast("Obsidian에 저장되었습니다.", "success");
       }
     } catch (error) {
-      showToast("保存失败: " + normalizeErrorMessage(error), "error");
+      showToast("저장 실패: " + normalizeErrorMessage(error), "error");
     }
   }
 
   async function syncBookmarkTimeline(options) {
     if (syncInFlight) {
-      throw new Error("书签页同步已在进行中");
+      throw new Error("북마크 페이지 동기화가 이미 진행 중입니다");
     }
     if (!isBookmarksPage()) {
-      throw new Error("请先打开 X 书签页（/i/bookmarks）再执行同步");
+      throw new Error("먼저 X 북마크 페이지(/i/bookmarks)를 연 다음 동기화를 실행하세요.");
     }
 
     syncInFlight = true;
@@ -137,7 +137,7 @@
     const seenUrls = new Set();
     let idleRounds = 0;
 
-    showToast(`开始同步书签页，目标 ${targetItems} 条...`, "info");
+    showToast(`북마크 페이지 동기화를 시작합니다. 목표 ${targetItems}개...`, "info");
     await publishActiveRunStatus(buildSyncActiveStatus(stats, "starting"));
     await resetTimelineToTop();
 
@@ -217,18 +217,18 @@
 
   async function clearBookmarksByUrls(options) {
     if (syncInFlight) {
-      throw new Error("书签页同步进行中，请稍后再清除书签");
+      throw new Error("북마크 페이지 동기화가 진행 중입니다. 나중에 북마크를 삭제하세요.");
     }
     if (clearInFlight) {
-      throw new Error("书签清除已在进行中");
+      throw new Error("북마크 삭제가 이미 진행 중입니다");
     }
     if (!isBookmarksPage()) {
-      throw new Error("请先回到 X 书签页（/i/bookmarks）再执行清除");
+      throw new Error("먼저 X 북마크 페이지(/i/bookmarks)로 돌아간 다음 삭제를 실행하세요.");
     }
 
     const requestedItems = normalizeClearCandidates(options.items || options.urls || []);
     if (requestedItems.length === 0) {
-      throw new Error("没有可清除的书签");
+      throw new Error("삭제할 북마크가 없습니다");
     }
 
     clearInFlight = true;
@@ -256,7 +256,7 @@
     const maxRounds = clampNumber(options.maxRounds, 8, SYNC_MAX_ROUNDS, estimateClearRounds(remaining.size));
     let idleRounds = 0;
 
-    showToast(`准备清除本轮成功书签 ${remaining.size} 条...`, "info");
+    showToast(`이번 회차 성공 북마크 ${remaining.size}개 삭제를 준비합니다...`, "info");
     await publishActiveRunStatus(buildClearActiveStatus(stats, remaining.size, "starting"));
     await resetTimelineToTop();
 
@@ -343,7 +343,7 @@
     for (let attempt = 0; attempt < CLEAR_RETRY_LIMIT; attempt += 1) {
       const removeButton = article.querySelector('[data-testid="removeBookmark"]');
       if (!removeButton) {
-        failedByKey.set(key, "未找到已收藏按钮");
+        failedByKey.set(key, "북마크됨 버튼을 찾을 수 없습니다");
         return false;
       }
 
@@ -360,14 +360,14 @@
       }
     }
 
-    failedByKey.set(key, "取消收藏后按钮状态未更新");
+    failedByKey.set(key, "북마크 해제 후 버튼 상태가 업데이트되지 않았습니다");
     return false;
   }
 
   function finalizeClearFailures(remaining, failedByKey, stats) {
     for (const [key] of remaining) {
       if (!failedByKey.has(key)) {
-        failedByKey.set(key, "未在当前书签页重新定位到该条目");
+        failedByKey.set(key, "현재 북마크 페이지에서 해당 항목을 다시 찾을 수 없습니다");
       }
     }
 
@@ -436,13 +436,13 @@
 
     PENDING_BY_URL.set(payload.url, Date.now());
     if (options.showStartToast) {
-      showToast("正在保存到 Obsidian...", "info");
+      showToast("Obsidian에 저장하는 중...", "info");
     }
 
     try {
       const response = await sendRuntimeMessage({ type: "SAVE_X_BOOKMARK", payload });
       if (!response?.success) {
-        throw new Error(response?.error || "保存失败");
+        throw new Error(response?.error || "저장 실패");
       }
       RECENT_SUCCESS.set(payload.url, Date.now());
       return response.result || {};
@@ -522,7 +522,7 @@
     Object.entries(map).forEach(([testId, key]) => {
       const el = group.querySelector(`[data-testid="${testId}"]`);
       const label = el?.getAttribute("aria-label") || "";
-      const match = label.match(/([\d,.]+(?:[KMB万亿])?)/i);
+      const match = label.match(/([\d,.]+(?:[KMB만억조])?)/i);
       if (match) {
         metrics[key] = match[1];
       }
@@ -530,7 +530,7 @@
 
     const analytics = article.querySelector('a[href*="/analytics"]');
     const viewLabel = analytics?.getAttribute("aria-label") || "";
-    const match = viewLabel.match(/([\d,.]+(?:[KMB万亿])?)/i);
+    const match = viewLabel.match(/([\d,.]+(?:[KMB만억조])?)/i);
     if (match) {
       metrics.views = match[1];
     }
@@ -613,31 +613,31 @@
 
   function buildSyncCompletionText(stats) {
     const parts = [
-      `目标 ${stats.targetItems} 条`,
-      `实际处理 ${stats.attempted} 条`,
-      `新增 ${stats.saved}`,
-      `去重 ${stats.deduped}`,
+      `목표 ${stats.targetItems}개`,
+      `실제 처리 ${stats.attempted}개`,
+      `신규 ${stats.saved}`,
+      `중복 제거 ${stats.deduped}`,
     ];
     if (stats.fallback > 0) {
-      parts.push(`降级 ${stats.fallback}`);
+      parts.push(`폴백 ${stats.fallback}`);
     }
     if (stats.failed > 0) {
-      parts.push(`失败 ${stats.failed}`);
+      parts.push(`실패 ${stats.failed}`);
     }
-    parts.push(`原因：${describeStopReason(stats.stoppedReason, "sync")}`);
-    return parts.join("，");
+    parts.push(`사유: ${describeStopReason(stats.stoppedReason, "sync")}`);
+    return parts.join(", ");
   }
 
   function buildClearCompletionText(stats) {
     const parts = [
-      `已清除 ${stats.cleared} 条`,
-      `剩余 ${stats.remainingUrls.length} 条`,
-      `原因：${describeStopReason(stats.stoppedReason, "clear")}`,
+      `${stats.cleared}개 삭제됨`,
+      `${stats.remainingUrls.length}개 남음`,
+      `사유: ${describeStopReason(stats.stoppedReason, "clear")}`,
     ];
     if (stats.failed > 0 && stats.topErrors?.length) {
-      parts.push(`主要原因 ${stats.topErrors[0].message}`);
+      parts.push(`주요 원인 ${stats.topErrors[0].message}`);
     }
-    return parts.join("，");
+    return parts.join(", ");
   }
 
   function recordSyncError(stats, payload, error) {
@@ -673,7 +673,7 @@
   function normalizeErrorMessage(error) {
     const raw = String(error?.message || error || "").trim();
     if (!raw) {
-      return "未知错误";
+      return "알 수 없는 오류";
     }
     return raw.length > 120 ? raw.slice(0, 117) + "..." : raw;
   }
@@ -788,27 +788,27 @@
   function describeStopReason(reason, phase) {
     if (phase === "clear") {
       if (reason === "completed") {
-        return "全部目标书签已清除";
+        return "모든 대상 북마크가 삭제되었습니다";
       }
       if (reason === "idle_limit") {
-        return "连续多轮未找到更多可清除书签";
+        return "여러 회차 동안 더 이상 삭제할 북마크를 찾지 못했습니다";
       }
       if (reason === "round_limit") {
-        return "已达到内部滚动上限，可能还有书签未重新定位到";
+        return "내부 스크롤 상한에 도달했습니다. 아직 재배치되지 않은 북마크가 있을 수 있습니다";
       }
-      return "已停止";
+      return "중지됨";
     }
 
     if (reason === "target_reached") {
-      return "已达到目标同步条数";
+      return "목표 동기화 개수에 도달했습니다";
     }
     if (reason === "idle_limit") {
-      return "后续没有加载出更多书签";
+      return "더 이상 북마크가 로드되지 않았습니다";
     }
     if (reason === "round_limit") {
-      return "已达到内部滚动上限，可能还有更多书签未加载";
+      return "내부 스크롤 상한에 도달했습니다. 아직 로드되지 않은 북마크가 있을 수 있습니다";
     }
-    return "已停止";
+    return "중지됨";
   }
 
   function buildSyncActiveStatus(stats, stage) {
@@ -830,7 +830,7 @@
       statusLine:
         stage === "completed"
           ? buildSyncCompletionText(stats)
-          : `同步中：${stats.attempted}/${stats.targetItems}，新增 ${stats.saved}，去重 ${stats.deduped}，失败 ${stats.failed}`,
+          : `동기화 중: ${stats.attempted}/${stats.targetItems}, 신규 ${stats.saved}, 중복 제거 ${stats.deduped}, 실패 ${stats.failed}`,
     };
   }
 
@@ -850,7 +850,7 @@
       statusLine:
         stage === "completed"
           ? buildClearCompletionText(stats)
-          : `清除中：已清除 ${stats.cleared}/${stats.requested}，剩余 ${remainingCount}，失败 ${stats.failed}`,
+          : `삭제 중: ${stats.cleared}/${stats.requested}개 삭제됨, ${remainingCount}개 남음, 실패 ${stats.failed}`,
     };
   }
 
@@ -883,9 +883,9 @@
       '<div class="x-bto-hud__header">',
       '  <div>',
       '    <p class="x-bto-hud__eyebrow">X Bookmark to Obsidian</p>',
-      '    <h2 class="x-bto-hud__title">运行状态</h2>',
+      '    <h2 class="x-bto-hud__title">실행 상태</h2>',
       "  </div>",
-      '  <button type="button" class="x-bto-hud__close" aria-label="关闭">×</button>',
+      '  <button type="button" class="x-bto-hud__close" aria-label="닫기">×</button>',
       "</div>",
       '<p class="x-bto-hud__line" data-role="stage"></p>',
       '<p class="x-bto-hud__line" data-role="progress"></p>',
@@ -919,7 +919,7 @@
     const errorEl = root.querySelector('[data-role="error"]');
 
     if (!status) {
-      stageEl.textContent = "暂无运行状态";
+      stageEl.textContent = "실행 상태 없음";
       progressEl.textContent = "";
       statsEl.textContent = "";
       reasonEl.textContent = "";
@@ -927,29 +927,29 @@
       return;
     }
 
-    const phaseLabel = status.phase === "clear" ? "清除中" : "同步中";
-    const completedLabel = status.phase === "clear" ? "清除完成" : "同步完成";
+    const phaseLabel = status.phase === "clear" ? "삭제 중" : "동기화 중";
+    const completedLabel = status.phase === "clear" ? "삭제 완료" : "동기화 완료";
     stageEl.textContent = status.isRunning ? phaseLabel : completedLabel;
 
     if (status.phase === "clear") {
       progressEl.textContent = status.isRunning
-        ? `已清除 ${status.cleared}/${status.requested}，剩余 ${status.remainingCount}`
-        : `已清除 ${status.cleared}/${status.requested}，剩余 ${status.remainingCount || 0}`;
-      statsEl.textContent = `失败 ${status.failed} · 轮次 ${status.rounds}`;
+        ? `${status.cleared}/${status.requested}개 삭제됨, ${status.remainingCount}개 남음`
+        : `${status.cleared}/${status.requested}개 삭제됨, ${status.remainingCount || 0}개 남음`;
+      statsEl.textContent = `실패 ${status.failed} · ${status.rounds}회차`;
       reasonEl.textContent = status.isRunning
         ? status.statusLine
-        : `停止原因：${describeStopReason(status.stoppedReason, "clear")}`;
+        : `중지 사유: ${describeStopReason(status.stoppedReason, "clear")}`;
     } else {
       progressEl.textContent = status.isRunning
-        ? `已处理 ${status.attempted}/${status.targetItems}`
-        : `目标 ${status.targetItems}，实际处理 ${status.attempted}`;
-      statsEl.textContent = `新增 ${status.saved} · 去重 ${status.deduped} · 降级 ${status.fallback} · 失败 ${status.failed}`;
+        ? `${status.attempted}/${status.targetItems}개 처리됨`
+        : `목표 ${status.targetItems}개, 실제 처리 ${status.attempted}개`;
+      statsEl.textContent = `신규 ${status.saved} · 중복 제거 ${status.deduped} · 폴백 ${status.fallback} · 실패 ${status.failed}`;
       reasonEl.textContent = status.isRunning
         ? status.statusLine
-        : `停止原因：${describeStopReason(status.stoppedReason, "sync")}`;
+        : `중지 사유: ${describeStopReason(status.stoppedReason, "sync")}`;
     }
 
-    errorEl.textContent = status.latestError ? `最近错误：${status.latestError}` : "";
+    errorEl.textContent = status.latestError ? `최근 오류: ${status.latestError}` : "";
   }
 
   function delay(ms) {
@@ -960,7 +960,7 @@
     return new Promise((resolve, reject) => {
       chrome.runtime.sendMessage(message, (response) => {
         if (chrome.runtime.lastError) {
-          reject(new Error("扩展后台连接失败，请刷新页面重试"));
+          reject(new Error("확장 프로그램 백그라운드 연결에 실패했습니다. 페이지를 새로고침한 후 다시 시도하세요."));
           return;
         }
         resolve(response);

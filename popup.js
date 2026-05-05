@@ -1,7 +1,7 @@
 document.addEventListener("DOMContentLoaded", async () => {
   const DEFAULT_OUTPUT_DIR = "";
   const DEFAULT_TARGET_SYNC_COUNT = 80;
-  const INSTALL_HINT = "Native Host 未连接，请先运行 install.command";
+  const INSTALL_HINT = "Native Host가 연결되지 않았습니다. install.command를 먼저 실행하세요.";
   const POLL_INTERVAL_MS = 1200;
 
   const nativeStatusEl = document.getElementById("native-status");
@@ -35,7 +35,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   try {
     const nativeStatus = await sendMessage({ type: "PING_NATIVE_HOST" });
-    nativeStatusEl.textContent = nativeStatus?.success ? "Native Host 已连接" : INSTALL_HINT;
+    nativeStatusEl.textContent = nativeStatus?.success ? "Native Host 연결됨" : INSTALL_HINT;
   } catch (_error) {
     nativeStatusEl.textContent = INSTALL_HINT;
   }
@@ -53,13 +53,13 @@ document.addEventListener("DOMContentLoaded", async () => {
     targetSyncCountEl.value = targetSyncCount;
     await chrome.storage.sync.set({ targetSyncCount });
     targetSyncCountDirty = false;
-    saveDirStatusEl.textContent = "目标同步条数已更新。";
+    saveDirStatusEl.textContent = "목표 동기화 개수가 업데이트되었습니다.";
   });
 
   saveDirBtn.addEventListener("click", async () => {
     const nextPath = outputDirEl.value.trim();
     if (!isValidAbsolutePath(nextPath)) {
-      saveDirStatusEl.textContent = "请输入绝对路径，或使用“选择文件夹”。";
+      saveDirStatusEl.textContent = "절대 경로를 입력하거나 \"폴더 선택\"을 사용하세요.";
       return;
     }
 
@@ -70,29 +70,29 @@ document.addEventListener("DOMContentLoaded", async () => {
       targetSyncCount,
     });
     targetSyncCountDirty = false;
-    saveDirStatusEl.textContent = "保存路径已更新。";
+    saveDirStatusEl.textContent = "저장 경로가 업데이트되었습니다.";
   });
 
   pickDirBtn.addEventListener("click", async () => {
-    saveDirStatusEl.textContent = "正在打开文件夹选择器...";
+    saveDirStatusEl.textContent = "폴더 선택기를 여는 중...";
     try {
       const result = await sendMessage({ type: "PICK_OUTPUT_DIR" });
       if (!result?.success || !result.path) {
-        saveDirStatusEl.textContent = result?.error ? "选择失败：" + result.error : "未选择文件夹。";
+        saveDirStatusEl.textContent = result?.error ? "선택 실패: " + result.error : "폴더가 선택되지 않았습니다.";
         return;
       }
       outputDirEl.value = result.path;
       await chrome.storage.sync.set({ obsidianOutputDir: result.path });
-      saveDirStatusEl.textContent = "保存路径已更新。";
+      saveDirStatusEl.textContent = "저장 경로가 업데이트되었습니다.";
     } catch (_error) {
-      saveDirStatusEl.textContent = "打开文件夹选择器失败。";
+      saveDirStatusEl.textContent = "폴더 선택기 열기 실패.";
     }
   });
 
   syncBookmarksBtn.addEventListener("click", async () => {
     const outputDir = outputDirEl.value.trim();
     if (!isValidAbsolutePath(outputDir)) {
-      syncStatusEl.textContent = "请先填写有效的 Obsidian 绝对路径。";
+      syncStatusEl.textContent = "유효한 Obsidian 절대 경로를 먼저 입력하세요.";
       return;
     }
 
@@ -100,7 +100,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     targetSyncCountEl.value = targetSyncCount;
 
     syncBookmarksBtn.disabled = true;
-    syncStatusEl.textContent = `正在请求书签页开始同步，目标 ${targetSyncCount} 条...`;
+    syncStatusEl.textContent = `북마크 페이지 동기화를 요청 중입니다. 목표 ${targetSyncCount}개...`;
 
     try {
       await chrome.storage.sync.set({
@@ -117,7 +117,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       });
 
       if (!response?.success) {
-        syncStatusEl.textContent = "同步失败：" + (response?.error || "未知错误");
+        syncStatusEl.textContent = "동기화 실패: " + (response?.error || "알 수 없는 오류");
         await refreshStatus();
         return;
       }
@@ -125,7 +125,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       syncStatusEl.textContent = formatSyncSummary(response.result || {});
       await refreshStatus();
     } catch (error) {
-      syncStatusEl.textContent = "同步失败：" + (error?.message || "未知错误");
+      syncStatusEl.textContent = "동기화 실패: " + (error?.message || "알 수 없는 오류");
     } finally {
       syncBookmarksBtn.disabled = false;
     }
@@ -133,19 +133,19 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   clearBookmarksBtn.addEventListener("click", async () => {
     clearBookmarksBtn.disabled = true;
-    clearStatusEl.textContent = "正在清除本轮成功书签...";
+    clearStatusEl.textContent = "이번 회차 성공 북마크를 삭제하는 중...";
 
     try {
       const response = await sendMessage({ type: "CLEAR_LAST_SYNC_BOOKMARKS" });
       if (!response?.success) {
-        clearStatusEl.textContent = "清除失败：" + (response?.error || "未知错误");
+        clearStatusEl.textContent = "삭제 실패: " + (response?.error || "알 수 없는 오류");
         await refreshStatus();
         return;
       }
 
       await refreshStatus();
     } catch (error) {
-      clearStatusEl.textContent = "清除失败：" + (error?.message || "未知错误");
+      clearStatusEl.textContent = "삭제 실패: " + (error?.message || "알 수 없는 오류");
     } finally {
       clearBookmarksBtn.disabled = false;
     }
@@ -160,14 +160,14 @@ document.addEventListener("DOMContentLoaded", async () => {
       const activeRun = state.activeRunStatus;
 
       if (!last) {
-        lastResultEl.textContent = "最近一次保存：暂无记录";
+        lastResultEl.textContent = "최근 저장: 기록 없음";
       } else {
-        const when = new Date(last.timestamp).toLocaleString("zh-CN", { hour12: false });
+        const when = new Date(last.timestamp).toLocaleString("ko-KR", { hour12: false });
         if (last.ok) {
-          const suffix = last.deduped ? "（已去重）" : "";
-          lastResultEl.textContent = `最近一次保存：${when} ${suffix}`;
+          const suffix = last.deduped ? "(중복 제거됨)" : "";
+          lastResultEl.textContent = `최근 저장: ${when} ${suffix}`;
         } else {
-          lastResultEl.textContent = `最近一次保存失败：${when} ${last.error || ""}`;
+          lastResultEl.textContent = `최근 저장 실패: ${when} ${last.error || ""}`;
         }
       }
 
@@ -180,9 +180,9 @@ document.addEventListener("DOMContentLoaded", async () => {
       syncBookmarksBtn.disabled = !!activeRun?.isRunning;
       clearBookmarksBtn.disabled = !!activeRun?.isRunning;
     } catch (_error) {
-      lastResultEl.textContent = "最近一次保存：读取状态失败";
-      syncLastResultEl.textContent = "最近一次批量同步：读取状态失败";
-      syncStatusEl.textContent = "运行状态读取失败。";
+      lastResultEl.textContent = "최근 저장: 상태 읽기 실패";
+      syncLastResultEl.textContent = "최근 일괄 동기화: 상태 읽기 실패";
+      syncStatusEl.textContent = "실행 상태 읽기 실패.";
       renderClearAction(clearActionRefs, null, null);
     }
   }
@@ -214,7 +214,7 @@ function sanitizeNumber(value, min, max, fallback) {
 
 function renderSyncStatus(target, activeRun, lastSync) {
   if (activeRun?.isRunning) {
-    target.textContent = activeRun.statusLine || "正在运行...";
+    target.textContent = activeRun.statusLine || "실행 중...";
     return;
   }
 
@@ -224,53 +224,53 @@ function renderSyncStatus(target, activeRun, lastSync) {
   }
 
   if (lastSync?.error) {
-    target.textContent = "同步失败：" + lastSync.error;
+    target.textContent = "동기화 실패: " + lastSync.error;
     return;
   }
 
-  target.textContent = "运行中会在 X 书签页右上角显示常驻进度面板。";
+  target.textContent = "실행 중에는 X 북마크 페이지 우측 상단에 상시 진행 패널이 표시됩니다.";
 }
 
 function formatSyncSummary(result) {
   const parts = [
-    `目标 ${result.targetItems || result.attempted || 0} 条`,
-    `实际处理 ${result.attempted || 0} 条`,
-    `新增 ${result.saved || 0}`,
-    `去重 ${result.deduped || 0}`,
+    `목표 ${result.targetItems || result.attempted || 0}개`,
+    `실제 처리 ${result.attempted || 0}개`,
+    `신규 ${result.saved || 0}`,
+    `중복 제거 ${result.deduped || 0}`,
   ];
   if (result.fallback) {
-    parts.push(`降级 ${result.fallback}`);
+    parts.push(`폴백 ${result.fallback}`);
   }
   if (result.failed) {
-    parts.push(`失败 ${result.failed}`);
+    parts.push(`실패 ${result.failed}`);
     if (result.topErrors?.length) {
       const topError = result.topErrors[0];
-      parts.push(`主要原因 ${topError.message} ×${topError.count}`);
+      parts.push(`주요 원인 ${topError.message} ×${topError.count}`);
     }
   }
   if (result.stoppedReason) {
-    parts.push(`原因：${describeSyncStopReason(result.stoppedReason)}`);
+    parts.push(`사유: ${describeSyncStopReason(result.stoppedReason)}`);
   }
-  return parts.join("，");
+  return parts.join(", ");
 }
 
 function renderLastSyncResult(target, result) {
   if (!result) {
-    target.textContent = "最近一次批量同步：暂无记录。";
+    target.textContent = "최근 일괄 동기화: 기록 없음.";
     return;
   }
 
   const when = result.timestamp
-    ? new Date(result.timestamp).toLocaleString("zh-CN", { hour12: false })
-    : "未知时间";
+    ? new Date(result.timestamp).toLocaleString("ko-KR", { hour12: false })
+    : "알 수 없는 시간";
 
   if (!result.ok) {
-    target.textContent = `最近一次批量同步失败：${when} ${result.error || ""}`;
+    target.textContent = `최근 일괄 동기화 실패: ${when} ${result.error || ""}`;
     return;
   }
 
   const summary = [when, formatSyncSummary(result)];
-  target.textContent = "最近一次批量同步：" + summary.join("，");
+  target.textContent = "최근 일괄 동기화: " + summary.join(", ");
 }
 
 function renderClearAction(refs, syncResult, activeRun) {
@@ -279,8 +279,8 @@ function renderClearAction(refs, syncResult, activeRun) {
   if (activeRun?.isRunning) {
     refs.container.classList.remove("is-hidden");
     refs.prompt.textContent = activeRun.phase === "clear"
-      ? "正在清除本轮成功书签..."
-      : "同步进行中，完成后可选择清除本轮成功书签。";
+      ? "이번 회차 성공 북마크를 삭제하는 중..."
+      : "동기화 진행 중입니다. 완료 후 성공한 북마크를 삭제할 수 있습니다.";
     refs.status.textContent = activeRun.statusLine || "";
     refs.button.classList.add("is-hidden");
     return;
@@ -288,9 +288,9 @@ function renderClearAction(refs, syncResult, activeRun) {
 
   if (!syncResult?.ok) {
     refs.container.classList.add("is-hidden");
-    refs.prompt.textContent = "本轮同步完成后，可选择清除本轮成功书签。";
-    refs.status.textContent = "默认不自动清除，避免误操作。";
-    refs.button.textContent = "清除本轮成功书签";
+    refs.prompt.textContent = "이번 회차 동기화 완료 후, 성공한 북마크를 삭제할 수 있습니다.";
+    refs.status.textContent = "실수 방지를 위해 기본값은 자동 삭제 안 함입니다.";
+    refs.button.textContent = "이번 회차 성공 북마크 삭제";
     return;
   }
 
@@ -306,62 +306,62 @@ function renderClearAction(refs, syncResult, activeRun) {
   refs.container.classList.remove("is-hidden");
 
   if (pendingCount > 0) {
-    refs.prompt.textContent = `本轮有 ${clearableCount || pendingCount} 条书签可清除，当前剩余 ${pendingCount} 条。`;
+    refs.prompt.textContent = `이번 회차에 ${clearableCount || pendingCount}개의 북마크를 삭제할 수 있으며, 현재 ${pendingCount}개 남았습니다.`;
     refs.button.textContent = pendingCount === clearableCount
-      ? `清除本轮成功书签（${pendingCount}）`
-      : `继续清除剩余书签（${pendingCount}）`;
+      ? `이번 회차 성공 북마크 삭제(${pendingCount})`
+      : `남은 북마크 계속 삭제(${pendingCount})`;
     refs.button.classList.remove("is-hidden");
   } else {
-    refs.prompt.textContent = `本轮 ${clearableCount} 条可清除书签已处理完清除动作。`;
+    refs.prompt.textContent = `이번 회차 ${clearableCount}개의 삭제 가능 북마크 처리가 완료되었습니다.`;
     refs.button.classList.add("is-hidden");
   }
 
   if (!clearResult) {
-    refs.status.textContent = "默认不自动清除，避免误操作。";
+    refs.status.textContent = "실수 방지를 위해 기본값은 자동 삭제 안 함입니다.";
     return;
   }
 
   const summary = [
-    `最近一次清除：已清除 ${clearResult.cleared || 0} 条`,
-    `剩余 ${getClearCandidateCount(clearResult.remainingItems, clearResult.remainingUrls)} 条`,
+    `최근 삭제: ${clearResult.cleared || 0}개 삭제됨`,
+    `남은 ${getClearCandidateCount(clearResult.remainingItems, clearResult.remainingUrls)}개`,
   ];
   if (clearResult.failed) {
-    summary.push(`失败 ${clearResult.failed}`);
+    summary.push(`실패 ${clearResult.failed}`);
   }
   if (clearResult.topErrors?.length) {
     const topError = clearResult.topErrors[0];
-    summary.push(`主要原因：${topError.message} ×${topError.count}`);
+    summary.push(`주요 원인: ${topError.message} ×${topError.count}`);
   }
   if (clearResult.stoppedReason) {
-    summary.push(`原因：${describeClearStopReason(clearResult.stoppedReason)}`);
+    summary.push(`사유: ${describeClearStopReason(clearResult.stoppedReason)}`);
   }
-  refs.status.textContent = summary.join("，");
+  refs.status.textContent = summary.join(", ");
 }
 
 function describeSyncStopReason(reason) {
   if (reason === "target_reached") {
-    return "已达到目标同步条数";
+    return "목표 동기화 개수에 도달했습니다";
   }
   if (reason === "idle_limit") {
-    return "后续没有加载出更多书签";
+    return "더 이상 북마크가 로드되지 않았습니다";
   }
   if (reason === "round_limit") {
-    return "已达到内部滚动上限，可能还有更多书签未加载";
+    return "내부 스크롤 상한에 도달했습니다. 아직 로드되지 않은 북마크가 있을 수 있습니다";
   }
-  return "已停止";
+  return "중지됨";
 }
 
 function describeClearStopReason(reason) {
   if (reason === "completed") {
-    return "全部目标书签已清除";
+    return "모든 대상 북마크가 삭제되었습니다";
   }
   if (reason === "idle_limit") {
-    return "连续多轮未找到更多可清除书签";
+    return "여러 회차 동안 더 이상 삭제할 북마크를 찾지 못했습니다";
   }
   if (reason === "round_limit") {
-    return "已达到内部滚动上限，可能还有书签未重新定位到";
+    return "내부 스크롤 상한에 도달했습니다. 아직 재배치되지 않은 북마크가 있을 수 있습니다";
   }
-  return "已停止";
+  return "중지됨";
 }
 
 function getClearCandidateCount(primary, fallback) {
