@@ -264,8 +264,6 @@ async function handleSaveThreadsBookmark(payload) {
   safePayload.filename_template = (syncState.filenameTemplate || DEFAULT_FILENAME_TEMPLATE).trim();
   safePayload.download_media = !!syncState.downloadMedia;
   safePayload.default_tags = (syncState.defaultTags || "").trim();
-  safePayload.source = safePayload.source || "threads-bookmark-click";
-
   if (!safePayload.output_dir) {
     throw new Error("먼저 플러그인 팝업에서 Obsidian 저장 경로를 설정하세요.");
   }
@@ -306,8 +304,8 @@ function validateThreadsPayload(payload) {
   if (!payload || typeof payload !== "object") {
     throw new Error("페이로드 누락");
   }
-  if (typeof payload.url !== "string" || !/^https:\/\/www\.threads\.net\/@[\w.]+\/post\/[A-Za-z0-9_-]+/.test(payload.url)) {
-    throw new Error("유효하지 않은 Threads URL");
+  if (typeof payload.url !== "string" || !/^https:\/\/www\.threads\.(com|net)\/@[\w.]+\/post\/[A-Za-z0-9_-]+/.test(payload.url)) {
+    throw new Error("유효하지 않은 Threads URL: " + payload.url);
   }
 }
 
@@ -468,6 +466,12 @@ function sanitizePayload(payload) {
   const authorHandle = typeof payload?.author_handle === "string" ? payload.author_handle.slice(0, 100) : "";
   const metrics = payload?.metrics && typeof payload.metrics === "object" ? payload.metrics : {};
 
+  const mediaUrls = Array.isArray(payload?.media_urls) ? payload.media_urls.filter(u => typeof u === "string") : [];
+  const externalLinks = Array.isArray(payload?.external_links) ? payload.external_links.filter(u => typeof u === "string") : [];
+
+  const source = typeof payload?.source === "string" ? payload.source : "x-bookmark-click";
+  const platform = typeof payload?.platform === "string" ? payload.platform : "x";
+
   return {
     url: String(payload?.url || ""),
     tweet_id: String(payload?.tweet_id || ""),
@@ -476,8 +480,11 @@ function sanitizePayload(payload) {
     text,
     published_at: String(payload?.published_at || ""),
     captured_at: String(payload?.captured_at || ""),
-    source: "x-bookmark-click",
+    source,
+    platform,
     content_hash: String(payload?.content_hash || ""),
+    media_urls: mediaUrls,
+    external_links: externalLinks,
     metrics: {
       likes: String(metrics.likes || ""),
       reposts: String(metrics.reposts || ""),
@@ -647,8 +654,11 @@ async function processRetryQueue() {
         download_media: !!syncState.downloadMedia,
         default_tags: (syncState.defaultTags || "").trim(),
       };
+      const isThreads = item.payload.platform === "threads"
+        || (item.payload.source || "").includes("threads");
+      const action = isThreads ? "save_threads_bookmark" : "save_x_bookmark";
       const result = await chrome.runtime.sendNativeMessage(NATIVE_HOST_NAME, {
-        action: "save_x_bookmark",
+        action,
         payload,
       });
 

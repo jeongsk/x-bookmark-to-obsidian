@@ -12,7 +12,8 @@
   "host_permissions": [
     "https://x.com/*",
     "https://twitter.com/*",
-    "https://www.threads.net/*"
+    "https://www.threads.net/*",
+    "https://www.threads.com/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -32,7 +33,8 @@
     },
     {
       "matches": [
-        "https://www.threads.net/*"
+        "https://www.threads.net/*",
+    "https://www.threads.com/*"
       ],
       "js": [
         "content-threads.js"

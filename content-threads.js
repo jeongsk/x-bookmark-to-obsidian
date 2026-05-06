@@ -6,12 +6,15 @@
   const PENDING_TTL_MS = 10000;
   const PENDING_BY_URL = new Map();
 
+  const POST_LINK_SELECTOR = 'a[href*="/post/"]';
+  const PROCESSED_CONTAINERS = new WeakSet();
+
   let observer = null;
 
   function init() {
     injectStyles();
-    observePosts();
     scanExistingPosts();
+    observeNewPosts();
   }
 
   function injectStyles() {
@@ -23,21 +26,22 @@
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        width: 24px;
-        height: 24px;
+        width: 32px;
+        height: 32px;
         border: none;
         background: none;
         cursor: pointer;
-        padding: 4px;
+        padding: 6px;
         border-radius: 50%;
         transition: background 0.15s;
+        vertical-align: middle;
       }
       .${BUTTON_CLASS}:hover {
         background: rgba(29, 155, 240, 0.1);
       }
       .${BUTTON_CLASS} svg {
-        width: 16px;
-        height: 16px;
+        width: 18px;
+        height: 18px;
         fill: none;
         stroke: currentColor;
         stroke-width: 2;
@@ -70,14 +74,16 @@
     document.head.appendChild(style);
   }
 
-  function observePosts() {
+  function observeNewPosts() {
     observer = new MutationObserver((mutations) => {
       for (const mutation of mutations) {
         for (const node of mutation.addedNodes) {
           if (node.nodeType !== Node.ELEMENT_NODE) continue;
-          const articles = node.matches?.("article") ? [node] : node.querySelectorAll?.("article") || [];
-          for (const article of articles) {
-            attachSaveButton(article);
+          const links = node.matches?.(POST_LINK_SELECTOR)
+            ? [node]
+            : Array.from(node.querySelectorAll?.(POST_LINK_SELECTOR) || []);
+          for (const link of links) {
+            processPostLink(link);
           }
         }
       }
@@ -86,20 +92,72 @@
   }
 
   function scanExistingPosts() {
-    for (const article of document.querySelectorAll("article")) {
-      attachSaveButton(article);
+    const links = document.querySelectorAll(POST_LINK_SELECTOR);
+    for (const link of links) {
+      processPostLink(link);
     }
   }
 
-  function attachSaveButton(article) {
-    if (article.querySelector(`.${BUTTON_CLASS}`)) return;
-
-    const postUrl = extractPostUrl(article);
+  function processPostLink(link) {
+    const postUrl = extractPostUrlFromLink(link);
     if (!postUrl) return;
 
-    const actionBar = findActionBar(article);
-    if (!actionBar) return;
+    const container = findPostContainer(link);
+    if (!container || PROCESSED_CONTAINERS.has(container)) return;
+    PROCESSED_CONTAINERS.add(container);
 
+    const actionBar = findActionBar(container);
+    if (!actionBar || actionBar.querySelector(`.${BUTTON_CLASS}`)) return;
+
+    attachSaveButton(actionBar, postUrl, container);
+  }
+
+  function extractPostUrlFromLink(link) {
+    const href = link.getAttribute("href") || "";
+    const match = href.match(/\/@[\w.]+\/post\/([A-Za-z0-9_-]+)/);
+    if (!match) return null;
+    return "https://www.threads.com" + href.split("?")[0];
+  }
+
+  function findPostContainer(link) {
+    let el = link.parentElement;
+    while (el && el !== document.body) {
+      const textLen = (el.innerText || "").length;
+      if (textLen > 60 && textLen < 5000 && el.children.length >= 3) {
+        return el;
+      }
+      el = el.parentElement;
+    }
+    return link.closest("div") || link.parentElement;
+  }
+
+  function findActionBar(container) {
+    // Threads action bar: contains 4-5 clickable divs/SVGs (like, comment, repost, send)
+    const allDivs = container.querySelectorAll("div");
+    let bestCandidate = null;
+    let bestScore = 0;
+
+    for (const div of allDivs) {
+      const svgs = div.querySelectorAll("svg");
+      if (svgs.length < 3 || svgs.length > 6) continue;
+
+      const parent = div.parentElement;
+      if (!parent) continue;
+
+      const parentSvgCount = parent.querySelectorAll("svg").length;
+      if (parentSvgCount === svgs.length) continue; // Same count means div IS the parent
+
+      const score = svgs.length;
+      if (score > bestScore) {
+        bestScore = score;
+        bestCandidate = div;
+      }
+    }
+
+    return bestCandidate;
+  }
+
+  function attachSaveButton(actionBar, postUrl, container) {
     const btn = document.createElement("button");
     btn.className = BUTTON_CLASS;
     btn.title = "Obsidian에 저장";
@@ -108,37 +166,10 @@
     btn.addEventListener("click", async (e) => {
       e.preventDefault();
       e.stopPropagation();
-      await handleSaveClick(article, postUrl, btn);
+      await handleSaveClick(container, postUrl, btn);
     });
 
     actionBar.appendChild(btn);
-  }
-
-  function findActionBar(article) {
-    // Threads action bar is typically a div with role="group" or the last flex row in the article
-    const group = article.querySelector('[role="group"]');
-    if (group) return group;
-
-    // Fallback: find a horizontal flex container with multiple buttons
-    const divs = article.querySelectorAll("div[style*=\"display\"], div");
-    for (const div of divs) {
-      const buttons = div.querySelectorAll("svg");
-      if (buttons.length >= 3) return div;
-    }
-    return null;
-  }
-
-  function extractPostUrl(article) {
-    // Threads post URLs are in links like /@username/post/POST_ID
-    const links = article.querySelectorAll('a[href*="/post/"]');
-    for (const link of links) {
-      const href = link.getAttribute("href") || "";
-      const match = href.match(/\/@[\w.]+\/post\/([A-Za-z0-9_-]+)/);
-      if (match) {
-        return "https://www.threads.net" + href.split("?")[0];
-      }
-    }
-    return null;
   }
 
   function extractPostId(url) {
@@ -146,14 +177,14 @@
     return match ? match[1] : "";
   }
 
-  async function handleSaveClick(article, postUrl, btn) {
+  async function handleSaveClick(container, postUrl, btn) {
     const urlKey = normalizeUrl(postUrl);
     if (PENDING_BY_URL.has(urlKey)) return;
 
     PENDING_BY_URL.set(urlKey, true);
     setTimeout(() => PENDING_BY_URL.delete(urlKey), PENDING_TTL_MS);
 
-    const payload = extractPayload(article, postUrl);
+    const payload = extractPayload(container, postUrl);
     if (!payload?.url) {
       showToast("게시글 링크를 식별하지 못했습니다.", "error");
       PENDING_BY_URL.delete(urlKey);
@@ -179,14 +210,14 @@
     }
   }
 
-  function extractPayload(article, postUrl) {
-    const text = extractText(article);
-    const authorName = extractAuthor(article);
-    const authorHandle = extractHandle(article, postUrl);
-    const timeEl = article.querySelector("time");
+  function extractPayload(container, postUrl) {
+    const text = extractText(container);
+    const authorHandle = extractHandle(postUrl);
+    const authorName = extractAuthor(container, authorHandle);
+    const timeEl = container.querySelector("time");
     const postId = extractPostId(postUrl);
-    const mediaUrls = extractMediaUrls(article);
-    const externalLinks = extractExternalLinks(article);
+    const mediaUrls = extractMediaUrls(container);
+    const externalLinks = extractExternalLinks(container);
 
     const contentHash = simpleHash([
       text,
@@ -213,18 +244,16 @@
     };
   }
 
-  function extractMediaUrls(article) {
+  function extractMediaUrls(container) {
     const urls = [];
-    // Images in Threads posts
-    const imgs = article.querySelectorAll('img[src*="cdninstagram.com"], img[src*="threads"], img[src*="fbcdn"]');
+    const imgs = container.querySelectorAll('img[src*="cdninstagram.com"], img[src*="threads"], img[src*="fbcdn"]');
     for (const img of imgs) {
       const src = img.getAttribute("src") || "";
       if (src && !src.includes("profile") && !src.includes("avatar")) {
         urls.push(src);
       }
     }
-    // Video posters
-    const videos = article.querySelectorAll("video");
+    const videos = container.querySelectorAll("video");
     for (const video of videos) {
       const poster = video.getAttribute("poster");
       if (poster) urls.push(poster);
@@ -237,15 +266,15 @@
     return [...new Set(urls)];
   }
 
-  function extractExternalLinks(article) {
+  function extractExternalLinks(container) {
     const urls = [];
-    const links = article.querySelectorAll("a[href]");
+    const links = container.querySelectorAll("a[href]");
     for (const link of links) {
       const href = link.getAttribute("href") || "";
       if (!href) continue;
       try {
-        const u = new URL(href.startsWith("http") ? href : "https://www.threads.net" + href);
-        if (!u.hostname.includes("threads.net") && !u.hostname.includes("instagram.com")) {
+        const u = new URL(href.startsWith("http") ? href : "https://www.threads.com" + href);
+        if (!u.hostname.includes("threads.com") && !u.hostname.includes("threads.net") && !u.hostname.includes("instagram.com")) {
           urls.push(u.href);
         }
       } catch (_e) {}
@@ -253,45 +282,68 @@
     return [...new Set(urls)];
   }
 
-  function extractText(article) {
-    // Threads post text is usually in a span within the post container
-    const spans = article.querySelectorAll("span");
+  function extractText(container) {
+    // Threads post text: find spans with readable length, prefer the main content
+    const spans = container.querySelectorAll("span");
     let longest = "";
     for (const span of spans) {
-      const t = span.innerText?.trim() || "";
-      if (t.length > longest.length && !t.startsWith("@") && t.length > 2) {
+      const t = (span.innerText || "").trim();
+      // Skip handles, timestamps, action button counts
+      if (t.length > longest.length && !/^@\w/.test(t) && !/^\d+[hmd]/.test(t) && !/^\d+$/.test(t) && t.length > 2) {
         longest = t;
+      }
+    }
+    // Fallback: get text from the first non-link, non-time content area
+    if (!longest) {
+      const divs = container.querySelectorAll("div");
+      for (const div of divs) {
+        const text = (div.innerText || "").trim();
+        if (text.length > 10 && text.length < 4000 && !div.querySelector("time") && !div.querySelector("svg")) {
+          longest = text;
+          break;
+        }
       }
     }
     return longest.slice(0, 4000);
   }
 
-  function extractAuthor(article) {
-    // Find author name - typically in a link or strong element
-    const strongEls = article.querySelectorAll("strong");
-    for (const el of strongEls) {
-      const text = el.innerText?.trim();
-      if (text && text.length < 80) return text.slice(0, 200);
-    }
-    // Fallback: look for spans with short non-handle text
-    const spans = article.querySelectorAll("span");
+  function extractAuthor(container, handle) {
+    // Look for span containing the handle text (typically near the top of the post)
+    const spans = container.querySelectorAll("span");
     for (const span of spans) {
-      const text = span.innerText?.trim();
-      if (text && text.length < 60 && !text.startsWith("@") && !text.includes("·")) {
+      const text = (span.innerText || "").trim();
+      if (text === handle || text === "@" + handle) {
+        // The author name is typically in a sibling or nearby span
+        const parent = span.parentElement;
+        if (parent) {
+          const siblings = parent.querySelectorAll("span");
+          for (const sib of siblings) {
+            const sibText = (sib.innerText || "").trim();
+            if (sibText && sibText !== text && sibText.length < 60 && !sibText.startsWith("@") && !/^\d/.test(sibText)) {
+              return sibText.slice(0, 200);
+            }
+          }
+        }
+      }
+    }
+    // Fallback: find any short text that looks like a name (not handle, not numeric)
+    for (const span of spans) {
+      const text = (span.innerText || "").trim();
+      if (text && text.length < 60 && text.length > 1 && !text.startsWith("@") && !/^\d+[hmd]/.test(text) && !/^\d+$/.test(text) && !text.includes("·")) {
         return text.slice(0, 200);
       }
     }
-    return "";
+    return handle || "";
   }
 
-  function extractHandle(_article, postUrl) {
+  function extractHandle(postUrl) {
     const match = postUrl.match(/\/@([\w.]+)\//);
     return match ? match[1] : "";
   }
 
   function normalizeUrl(url) {
     try {
-      const u = new URL(url.startsWith("http") ? url : "https://www.threads.net" + url);
+      const u = new URL(url.startsWith("http") ? url : "https://www.threads.com" + url);
       return u.origin + u.pathname.split("?")[0];
     } catch (_e) {
       return url;
