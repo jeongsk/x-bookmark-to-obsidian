@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>X Bookmark to Obsidian — Test Fixture</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #000; color: #e7e9ea; }
+    article { border-bottom: 1px solid #2f3336; padding: 12px 16px; }
+    article[data-testid="tweet"] { display: flex; gap: 12px; }
+    .tweet-body { flex: 1; }
+    a { color: #1d9bf0; text-decoration: none; }
+    time { color: #71767b; font-size: 13px; }
+    button[data-testid="bookmark"],
+    button[data-testid="removeBookmark"] {
+      background: none; border: none; cursor: pointer; padding: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div role="region" aria-label="타임라인: 북마크">
+    <!-- Article 1: Already bookmarked (has removeBookmark) -->
+    <article data-testid="tweet" id="tweet-1789012345678901234">
+      <div class="tweet-body">
+        <div data-testid="User-Name">
+          <a href="/testuser1">Test User 1</a>
+          <span>@testuser1</span>
+        </div>
+        <div data-testid="tweetText">첫 번째 테스트 북마크입니다. #테스트</div>
+        <a href="/testuser1/status/1789012345678901234" dir="auto">
+          <time datetime="2025-06-15T09:30:00.000Z">6월 15일</time>
+        </a>
+        <div role="group">
+          <button data-testid="reply" aria-label="답글 5개">5</button>
+          <button data-testid="retweet" aria-label="리트윗 12개">12</button>
+          <button data-testid="like" aria-label="좋아요 34개">34</button>
+          <button data-testid="removeBookmark" aria-label="북마크됨"></button>
+        </div>
+      </div>
+    </article>
+
+    <!-- Article 2: Already bookmarked -->
+    <article data-testid="tweet" id="tweet-1789012345678901235">
+      <div class="tweet-body">
+        <div data-testid="User-Name">
+          <a href="/testuser2">Test User 2</a>
+          <span>@testuser2</span>
+        </div>
+        <div data-testid="tweetText">두 번째 북마크 — 미디어 포함</div>
+        <a href="/testuser2/status/1789012345678901235" dir="auto">
+          <time datetime="2025-06-14T14:22:00.000Z">6월 14일</time>
+        </a>
+        <div role="group">
+          <button data-testid="reply" aria-label="답글">0</button>
+          <button data-testid="retweet" aria-label="리트윗 3개">3</button>
+          <button data-testid="like" aria-label="좋아요 17개">17</button>
+          <button data-testid="removeBookmark" aria-label="북마크됨"></button>
+        </div>
+      </div>
+    </article>
+
+    <!-- Article 3: NOT bookmarked (has bookmark button) -->
+    <article data-testid="tweet" id="tweet-1789012345678901236">
+      <div class="tweet-body">
+        <div data-testid="User-Name">
+          <a href="/testuser3">Test User 3</a>
+          <span>@testuser3</span>
+        </div>
+        <div data-testid="tweetText">북마크되지 않은 게시글</div>
+        <a href="/testuser3/status/1789012345678901236" dir="auto">
+          <time datetime="2025-06-13T11:00:00.000Z">6월 13일</time>
+        </a>
+        <div role="group">
+          <button data-testid="reply" aria-label="답글">2</button>
+          <button data-testid="retweet" aria-label="리트윗">1</button>
+          <button data-testid="like" aria-label="좋아요">8</button>
+          <button data-testid="bookmark" aria-label="북마크"></button>
+        </div>
+      </div>
+    </article>
+  </div>
+</body>
+</html>
