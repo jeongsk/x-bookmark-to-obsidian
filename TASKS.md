@@ -4,11 +4,12 @@
 
 ## 진행률
 
-- 전체: 15/15 완료 (100%)
+- 전체: 18/18 완료 (100%)
 - Phase 1 완성도: 100% (핵심 기능 완성)
 - Phase 1.5 완성도: 100% (Threads 기본 지원 완성)
 - Phase 2 완성도: 100% (자동화 강화 완성)
 - Phase 3 완성도: 100% (품질 개선 완성)
+- Phase 4 완성도: 100% (Threads 고도화 완성)
 
 ---
 
@@ -95,6 +96,24 @@
 
 ---
 
+## Phase 4: Threads 고도화
+
+### 16. Threads 미디어/외부링크 추출
+- [x] content-threads.js: extractMediaUrls() - 이미지/비디오 URL 추출
+- [x] content-threads.js: extractExternalLinks() - 외부 링크 URL 추출
+- [x] content-threads.js: payload에 media_urls, external_links 포함
+
+### 17. Threads Markdown 미디어/링크 섹션
+- [x] btl_file_writer.py: build_threads_markdown()에 ## 미디어 섹션 추가
+- [x] btl_file_writer.py: build_threads_markdown()에 ## 링크 섹션 추가
+- [x] btl_file_writer.py: _update_threads_note() 콘텐츠 변경 시 전체 재작성
+
+### 18. Threads E2E 테스트
+- [x] tests/fixtures/threads.html: Threads 게시물 fixture 페이지 (이미지, 비디오, 외부링크, 프로필)
+- [x] tests/e2e/threads-extraction.spec.js: 9개 테스트 (URL 추출, 미디어 추출, 외부링크, 해시)
+
+---
+
 ## 완료된 작업
 
 | # | 작업 | 완료일 |
@@ -113,3 +132,6 @@
 | 13 | E2E 테스트 (Playwright) | 2026-05-06 |
 | 14 | 성능 최적화 (LRU 캐시) | 2026-05-06 |
 | 15 | 배포 자동화 (GitHub Actions) | 2026-05-06 |
+| 16 | Threads 미디어/외부링크 추출 | 2026-05-06 |
+| 17 | Threads Markdown 미디어/링크 섹션 | 2026-05-06 |
+| 18 | Threads E2E 테스트 | 2026-05-06 |
