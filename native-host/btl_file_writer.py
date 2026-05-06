@@ -697,6 +697,19 @@ def build_threads_markdown(payload: Dict[str, Any]) -> Tuple[str, str]:
         text.strip() or "(본문 없음)",
     ]
 
+    media_urls = payload.get("media_urls", []) or []
+    if media_urls:
+        media_lines = extract_media_lines(media_urls)
+        if media_lines:
+            lines.extend(["", "## 미디어", ""])
+            lines.extend(media_lines)
+
+    external_links = payload.get("external_links", []) or []
+    if external_links:
+        lines.extend(["", "## 링크", ""])
+        for link in external_links:
+            lines.append(f"- {link}")
+
     return "\n".join(lines).strip() + "\n", title
 
 

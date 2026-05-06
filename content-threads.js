@@ -185,11 +185,15 @@
     const authorHandle = extractHandle(article, postUrl);
     const timeEl = article.querySelector("time");
     const postId = extractPostId(postUrl);
+    const mediaUrls = extractMediaUrls(article);
+    const externalLinks = extractExternalLinks(article);
 
     const contentHash = simpleHash([
       text,
       authorName,
       authorHandle,
+      mediaUrls.join(","),
+      externalLinks.join(","),
     ].join("|"));
 
     return {
@@ -203,8 +207,50 @@
       source: "threads-bookmark-click",
       platform: "threads",
       metrics: {},
+      media_urls: mediaUrls,
+      external_links: externalLinks,
       content_hash: contentHash,
     };
+  }
+
+  function extractMediaUrls(article) {
+    const urls = [];
+    // Images in Threads posts
+    const imgs = article.querySelectorAll('img[src*="cdninstagram.com"], img[src*="threads"], img[src*="fbcdn"]');
+    for (const img of imgs) {
+      const src = img.getAttribute("src") || "";
+      if (src && !src.includes("profile") && !src.includes("avatar")) {
+        urls.push(src);
+      }
+    }
+    // Video posters
+    const videos = article.querySelectorAll("video");
+    for (const video of videos) {
+      const poster = video.getAttribute("poster");
+      if (poster) urls.push(poster);
+      const sources = video.querySelectorAll("source");
+      for (const source of sources) {
+        const src = source.getAttribute("src");
+        if (src) urls.push(src);
+      }
+    }
+    return [...new Set(urls)];
+  }
+
+  function extractExternalLinks(article) {
+    const urls = [];
+    const links = article.querySelectorAll("a[href]");
+    for (const link of links) {
+      const href = link.getAttribute("href") || "";
+      if (!href) continue;
+      try {
+        const u = new URL(href.startsWith("http") ? href : "https://www.threads.net" + href);
+        if (!u.hostname.includes("threads.net") && !u.hostname.includes("instagram.com")) {
+          urls.push(u.href);
+        }
+      } catch (_e) {}
+    }
+    return [...new Set(urls)];
   }
 
   function extractText(article) {
