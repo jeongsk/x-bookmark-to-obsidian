@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Threads — Test Fixture</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #fff; color: #000; }
+    article { border-bottom: 1px solid #ddd; padding: 16px; margin: 0 auto; max-width: 600px; }
+    a { color: #000; text-decoration: none; }
+    time { color: #666; font-size: 13px; }
+    img { max-width: 100%; border-radius: 12px; }
+    [role="group"] { display: flex; gap: 16px; margin-top: 8px; padding-top: 8px; }
+  </style>
+</head>
+<body>
+  <!-- Post 1: Threads post with text only -->
+  <article>
+    <div>
+      <a href="/@testuser1">
+        <strong>Test User 1</strong>
+        <span>@testuser1</span>
+      </a>
+    </div>
+    <div>
+      <span>Threads 첫 번째 테스트 게시글입니다. 여러 줄 텍스트와 함께 다양한 콘텐츠를 포함합니다.</span>
+    </div>
+    <a href="/@testuser1/post/AbC123DeFgHi">
+      <time datetime="2025-06-15T09:30:00.000Z">6월 15일</time>
+    </a>
+    <div role="group">
+      <button aria-label="좋아요 25개">♥ 25</button>
+      <button aria-label="답글 5개">💬 5</button>
+      <button aria-label="리포스트 3개">🔄 3</button>
+    </div>
+  </article>
+
+  <!-- Post 2: Threads post with media images -->
+  <article>
+    <div>
+      <a href="/@testuser2">
+        <strong>Test User 2</strong>
+        <span>@testuser2</span>
+      </a>
+    </div>
+    <div>
+      <span>이미지가 포함된 Threads 게시글입니다. 🖼️</span>
+    </div>
+    <img src="https://scontent.cdninstagram.com/v/t51.2885-15/123456789_abcdef.jpg" alt="테스트 이미지 1">
+    <img src="https://scontent.cdninstagram.com/v/t51.2885-15/987654321_ghijkl.jpg" alt="테스트 이미지 2">
+    <a href="/@testuser2/post/XyZ456AbCdEf">
+      <time datetime="2025-06-14T14:22:00.000Z">6월 14일</time>
+    </a>
+    <div role="group">
+      <button aria-label="좋아요 42개">♥ 42</button>
+      <button aria-label="답글 8개">💬 8</button>
+    </div>
+  </article>
+
+  <!-- Post 3: Threads post with external links and video -->
+  <article>
+    <div>
+      <a href="/@testuser3">
+        <strong>Test User 3</strong>
+        <span>@testuser3</span>
+      </a>
+    </div>
+    <div>
+      <span>외부 링크와 비디오가 포함된 Threads 게시글입니다.</span>
+      <a href="https://example.com/article" rel="noopener">example.com/article</a>
+      <a href="https://github.com/example/repo" rel="noopener">github.com/example/repo</a>
+    </div>
+    <video poster="https://scontent.cdninstagram.com/v/t51.2885-15/111111_video_thumb.jpg" controls>
+      <source src="https://video.cdninstagram.com/v/t50.2885-16/video.mp4" type="video/mp4">
+    </video>
+    <a href="/@testuser3/post/MnO789PqRsTu">
+      <time datetime="2025-06-13T11:00:00.000Z">6월 13일</time>
+    </a>
+    <div role="group">
+      <button aria-label="좋아요 128개">♥ 128</button>
+      <button aria-label="답글 15개">💬 15</button>
+    </div>
+  </article>
+
+  <!-- Post 4: Threads post with profile image (should be excluded) -->
+  <article>
+    <div>
+      <a href="/@testuser4">
+        <img src="https://scontent.cdninstagram.com/v/t51.2885-19/profile_pic.jpg" alt="profile" style="width:36px;height:36px;border-radius:50%;">
+        <strong>Test User 4</strong>
+        <span>@testuser4</span>
+      </a>
+    </div>
+    <div>
+      <span>프로필 이미지만 있고 미디어는 없는 게시글입니다.</span>
+    </div>
+    <a href="/@testuser4/post/VwX012YzAbCd">
+      <time datetime="2025-06-12T08:00:00.000Z">6월 12일</time>
+    </a>
+    <div role="group">
+      <button aria-label="좋아요 7개">♥ 7</button>
+    </div>
+  </article>
+</body>
+</html>
