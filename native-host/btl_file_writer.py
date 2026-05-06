@@ -11,12 +11,14 @@ Actions:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
 import struct
 import subprocess
 import sys
+import urllib.request
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
@@ -33,6 +35,7 @@ MAX_MESSAGE_BYTES = 1024 * 1024
 # In-memory URL index for O(1) duplicate detection
 _url_index: Dict[str, Path] = {}
 _index_loaded: bool = False
+_URL_INDEX_MAX_SIZE = 10000
 
 
 def read_message() -> Optional[Dict[str, Any]]:
@@ -146,9 +149,13 @@ def sanitize_filename(name: str, max_len: int = 80) -> str:
 
 def normalize_url(url: str) -> str:
     match = re.search(r"https://(?:x|twitter)\.com/([^/]+)/status/(\d+)", url or "")
-    if not match:
-        return url or ""
-    return f"https://x.com/{match.group(1)}/status/{match.group(2)}"
+    if match:
+        return f"https://x.com/{match.group(1)}/status/{match.group(2)}"
+    threads_match = re.search(r"(https://www\.threads\.net/@[\w.]+/post/[A-Za-z0-9_-]+)", url or "")
+    if threads_match:
+        u = threads_match.group(1)
+        return u.split("?")[0]
+    return url or ""
 
 
 def _load_url_index(output_dir: Path) -> None:
@@ -172,12 +179,19 @@ def _load_url_index(output_dir: Path) -> None:
             if normalized:
                 _url_index[normalized] = path
     _index_loaded = True
-    log_event("url_index_loaded", count=len(_url_index), dir=str(output_dir))
+    entry_count = len(_url_index)
+    log_event("url_index_loaded", count=entry_count, dir=str(output_dir))
+    if entry_count >= _URL_INDEX_MAX_SIZE:
+        log_event("url_index_at_capacity", count=entry_count, max=_URL_INDEX_MAX_SIZE)
 
 
 def _index_note(url: str, path: Path) -> None:
-    """Incrementally add a saved note to the URL index."""
-    _url_index[normalize_url(url)] = path
+    """Incrementally add a saved note to the URL index (LRU-bounded)."""
+    normalized = normalize_url(url)
+    if len(_url_index) >= _URL_INDEX_MAX_SIZE and normalized not in _url_index:
+        oldest = next(iter(_url_index))
+        del _url_index[oldest]
+    _url_index[normalized] = path
 
 
 def detect_existing_note(url: str, output_dir: Path) -> Optional[Path]:
@@ -224,6 +238,38 @@ def build_title(fetch_data: Optional[Dict[str, Any]], payload: Dict[str, Any]) -
     return sanitize_filename(title_source, max_len=60)
 
 
+def _parse_tags(raw: str) -> list[str]:
+    """Parse comma-separated tags into a cleaned list."""
+    if not raw or not raw.strip():
+        return []
+    return [t.strip() for t in raw.split(",") if t.strip()]
+
+
+def _apply_filename_template(payload: Dict[str, Any], fetch_data: Optional[Dict[str, Any]], title: str) -> str:
+    template = (payload.get("filename_template") or "{title}").strip()
+    tweet = (fetch_data or {}).get("tweet", {})
+    captured_at = payload.get("captured_at", "")
+    try:
+        date_str = captured_at[:10] if len(captured_at) >= 10 else datetime.now().strftime("%Y-%m-%d")
+    except Exception:
+        date_str = datetime.now().strftime("%Y-%m-%d")
+
+    author = (
+        (tweet.get("screen_name") or fetch_data.get("username") or payload.get("author_handle", "")).strip().lstrip("@")
+    )
+    tweet_id = payload.get("tweet_id", payload.get("id", ""))
+    source = payload.get("source", "x-bookmark")
+
+    result = template
+    result = result.replace("{title}", title)
+    result = result.replace("{date}", date_str)
+    result = result.replace("{author}", author)
+    result = result.replace("{id}", str(tweet_id))
+    result = result.replace("{source}", str(source))
+
+    return result or title
+
+
 def build_markdown(fetch_data: Optional[Dict[str, Any]], payload: Dict[str, Any], fetch_error: str = "") -> Tuple[str, str]:
     now = datetime.now()
     today = now.strftime("%Y-%m-%d")
@@ -260,16 +306,20 @@ def build_markdown(fetch_data: Optional[Dict[str, Any]], payload: Dict[str, Any]
 
     info_parts = [f"{k} {v}" for k, v in metrics.items() if v not in (None, "", "0")]
 
+    content_hash = str(payload.get("content_hash", ""))
+    default_tags = _parse_tags(payload.get("default_tags", ""))
+
     lines = [
         "---",
         "aliases: []",
-        "tags: []",
+        f"tags: [{', '.join(default_tags)}]" if default_tags else "tags: []",
         "up:",
         f"url: {normalized_url}",
         f"author: {format_author(author_name, handle)}",
         f"published: {published}",
         "source: X (Twitter)",
         "fetch_method: x_bookmark_helper",
+        f"content_hash: {content_hash}",
         f"생성 시간: {today}",
         f"수정 시간: {modified}",
         "---",
@@ -337,6 +387,49 @@ def extract_media_lines(media_items: Any) -> list[str]:
     return dedupe_lines(lines)
 
 
+def _download_media_files(markdown: str, output_dir: Path, note_stem: str) -> str:
+    """Download referenced media files and replace remote URLs with local paths."""
+    media_dir = output_dir / f"{note_stem}_media"
+    img_pattern = re.compile(r"!\[\]\((https?://[^)]+)\)")
+
+    updated = markdown
+    for match in img_pattern.finditer(markdown):
+        url = match.group(1)
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "X-Bookmark-To-Obsidian/2.5"})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = resp.read()
+        except Exception:
+            log_event("media_download_failed", url=url)
+            continue
+
+        ext = ".jpg"
+        content_type = ""
+        if hasattr(resp, "info"):
+            content_type = resp.info().get_content_type()
+        if "png" in content_type:
+            ext = ".png"
+        elif "gif" in content_type:
+            ext = ".gif"
+        elif "webp" in content_type:
+            ext = ".webp"
+        elif "mp4" in content_type:
+            ext = ".mp4"
+
+        name = hashlib.sha256(url.encode()).hexdigest()[:12] + ext
+        try:
+            media_dir.mkdir(parents=True, exist_ok=True)
+            filepath = media_dir / name
+            filepath.write_bytes(data)
+            relative_path = f"{media_dir.name}/{name}"
+            updated = updated.replace(url, relative_path)
+            log_event("media_downloaded", url=url, path=str(filepath))
+        except Exception as exc:
+            log_event("media_save_failed", url=url, error=str(exc))
+
+    return updated
+
+
 def dedupe_lines(lines: list[str]) -> list[str]:
     seen = set()
     result = []
@@ -385,8 +478,25 @@ def save_x_bookmark(payload: Dict[str, Any]) -> Dict[str, Any]:
     if not re.match(r"^https://x\.com/[^/]+/status/\d+$", url):
         return {"success": False, "error": "invalid tweet url"}
 
+    content_hash = str(payload.get("content_hash", ""))
     existing = detect_existing_note(url, output_dir)
     if existing:
+        existing_hash = _read_content_hash(existing)
+        if content_hash and existing_hash and content_hash == existing_hash:
+            log_event("deduped", url=url, path=str(existing))
+            return {
+                "success": True,
+                "path": str(existing),
+                "deduped": True,
+                "fallback_used": False,
+                "fetch_status": "existing",
+                "note_title": existing.stem,
+            }
+
+        if content_hash and existing_hash and content_hash != existing_hash:
+            log_event("content_changed", url=url, path=str(existing), old_hash=existing_hash, new_hash=content_hash)
+            return _update_existing_note(existing, payload, url)
+
         log_event("deduped", url=url, path=str(existing))
         return {
             "success": True,
@@ -399,8 +509,14 @@ def save_x_bookmark(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     fetch_data, fetch_error = run_x_fetcher(url)
     markdown, title = build_markdown(fetch_data, payload, fetch_error=fetch_error)
-    filename = sanitize_filename(title or payload.get("tweet_id", "x-bookmark"), max_len=80) + ".md"
+    filename = _apply_filename_template(payload, fetch_data, title) + ".md"
+    filename = sanitize_filename(filename, max_len=120)
     output_path = output_dir / filename
+
+    if payload.get("download_media"):
+        note_stem = output_path.stem
+        markdown = _download_media_files(markdown, output_dir, note_stem)
+
     result = write_file(str(output_path), markdown, overwrite=False)
 
     if not result.get("success"):
@@ -423,6 +539,263 @@ def save_x_bookmark(payload: Dict[str, Any]) -> Dict[str, Any]:
         "fetch_status": "fallback" if fetch_error else "success",
         "note_title": title,
     }
+
+
+def _read_content_hash(path: Path) -> str:
+    """Read the content_hash from a note's frontmatter."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return ""
+    m = re.search(r"^content_hash:\s*[\"']?([a-f0-9]+)[\"']?\s*$", text[:2000], flags=re.MULTILINE)
+    return m.group(1) if m else ""
+
+
+def _update_existing_note(existing_path: Path, payload: Dict[str, Any], url: str) -> Dict[str, Any]:
+    """Update an existing note when content has changed."""
+    fetch_data, fetch_error = run_x_fetcher(url)
+    markdown, title = build_markdown(fetch_data, payload, fetch_error=fetch_error)
+
+    if payload.get("download_media"):
+        note_stem = existing_path.stem
+        markdown = _download_media_files(markdown, existing_path.parent, note_stem)
+
+    now = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    try:
+        text = existing_path.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        text = ""
+
+    updated = re.sub(
+        r"^updated_at:.*$",
+        f"updated_at: \"{now}\"",
+        text,
+        flags=re.MULTILINE,
+    )
+    if "updated_at:" not in updated:
+        updated = re.sub(
+            r"(---\n)",
+            f"\\1updated_at: \"{now}\"\n",
+            updated,
+            count=1,
+        )
+
+    existing_path.write_text(markdown, encoding="utf-8")
+    log_event("updated", url=url, path=str(existing_path))
+    return {
+        "success": True,
+        "path": str(existing_path),
+        "deduped": False,
+        "fallback_used": bool(fetch_error),
+        "fetch_status": "updated",
+        "note_title": title,
+    }
+
+
+def save_threads_bookmark(payload: Dict[str, Any]) -> Dict[str, Any]:
+    url = normalize_url(str(payload.get("url", "")))
+    output_dir_raw = str(payload.get("output_dir", "") or DEFAULT_OUTPUT_DIR).strip()
+    if not output_dir_raw:
+        return {"success": False, "error": "Obsidian 저장 디렉토리를 먼저 설정하세요."}
+    output_dir, dir_err = validate_directory_path(output_dir_raw)
+    if dir_err:
+        return {"success": False, "error": dir_err}
+    assert output_dir is not None
+    log_event("threads_save_requested", url=url, post_id=payload.get("tweet_id", ""))
+
+    if not re.match(r"^https://www\.threads\.net/@[\w.]+/post/[A-Za-z0-9_-]+$", url):
+        return {"success": False, "error": "invalid threads url"}
+
+    content_hash = str(payload.get("content_hash", ""))
+    existing = detect_existing_note(url, output_dir)
+    if existing:
+        existing_hash = _read_content_hash(existing)
+        if content_hash and existing_hash and content_hash == existing_hash:
+            log_event("threads_deduped", url=url, path=str(existing))
+            return {
+                "success": True,
+                "path": str(existing),
+                "deduped": True,
+                "note_title": existing.stem,
+            }
+
+        if content_hash and existing_hash and content_hash != existing_hash:
+            log_event("threads_content_changed", url=url, path=str(existing))
+            return _update_threads_note(existing, payload, url)
+
+        log_event("threads_deduped", url=url, path=str(existing))
+        return {
+            "success": True,
+            "path": str(existing),
+            "deduped": True,
+            "note_title": existing.stem,
+        }
+
+    markdown, title = build_threads_markdown(payload)
+    filename = _apply_filename_template(payload, None, title) + ".md"
+    filename = sanitize_filename(filename, max_len=120)
+    output_path = output_dir / filename
+
+    if payload.get("download_media"):
+        note_stem = output_path.stem
+        markdown = _download_media_files(markdown, output_dir, note_stem)
+
+    result = write_file(str(output_path), markdown, overwrite=False)
+
+    if not result.get("success"):
+        log_event("threads_write_failed", url=url, error=result.get("error", "unknown"))
+        return result
+
+    log_event("threads_saved", url=url, path=result["path"])
+    _index_note(url, output_path)
+    return {
+        "success": True,
+        "path": result["path"],
+        "deduped": False,
+        "note_title": title,
+    }
+
+
+def build_threads_markdown(payload: Dict[str, Any]) -> Tuple[str, str]:
+    now = datetime.now()
+    today = now.strftime("%Y-%m-%d")
+    normalized_url = normalize_url(payload.get("url", ""))
+
+    author_name = payload.get("author_name", "")
+    author_handle = payload.get("author_handle", "")
+    text = payload.get("text", "") or ""
+    published = payload.get("published_at", "")[:10] or today
+    content_hash = str(payload.get("content_hash", ""))
+    default_tags = _parse_tags(payload.get("default_tags", ""))
+    post_id = payload.get("tweet_id", "")
+
+    title = sanitize_filename(text.splitlines()[0] if text else (post_id or "threads-post"), max_len=60)
+
+    lines = [
+        "---",
+        "aliases: []",
+        f"tags: [{', '.join(default_tags)}]" if default_tags else "tags: []",
+        "up:",
+        f"url: {normalized_url}",
+        f"author: {format_author(author_name, author_handle)}",
+        f"published: {published}",
+        "source: Threads",
+        "platform: threads",
+        f"content_hash: {content_hash}",
+        f"생성 시간: {today}",
+        f"수정 시간: {today}",
+        "---",
+        f"# {title}",
+        "",
+        "> [!INFO] 게시글 정보",
+        f"> - 저자: {author_name or '@' + author_handle if author_handle else '알 수 없는 저자'}",
+        f"> - 링크: {normalized_url}",
+        f"> - 북마크 시간: {today}",
+        "",
+        "## 본문",
+        "",
+        text.strip() or "(본문 없음)",
+    ]
+
+    return "\n".join(lines).strip() + "\n", title
+
+
+def _update_threads_note(existing_path: Path, payload: Dict[str, Any], url: str) -> Dict[str, Any]:
+    markdown, title = build_threads_markdown(payload)
+
+    if payload.get("download_media"):
+        note_stem = existing_path.stem
+        markdown = _download_media_files(markdown, existing_path.parent, note_stem)
+
+    now = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    try:
+        text = existing_path.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        text = ""
+
+    updated = re.sub(
+        r"^updated_at:.*$",
+        f"updated_at: \"{now}\"",
+        text,
+        flags=re.MULTILINE,
+    )
+    if "updated_at:" not in updated:
+        updated = re.sub(
+            r"(---\n)",
+            f"\\1updated_at: \"{now}\"\n",
+            updated,
+            count=1,
+        )
+
+    existing_path.write_text(markdown, encoding="utf-8")
+    log_event("threads_updated", url=url, path=str(existing_path))
+    return {
+        "success": True,
+        "path": str(existing_path),
+        "deduped": False,
+        "note_title": title,
+    }
+
+
+def archive_x_bookmark(payload: Dict[str, Any]) -> Dict[str, Any]:
+    url = normalize_url(str(payload.get("url", "")))
+    output_dir_raw = str(payload.get("output_dir", "") or DEFAULT_OUTPUT_DIR).strip()
+    if not output_dir_raw:
+        return {"success": False, "error": "Obsidian 저장 디렉토리를 먼저 설정하세요."}
+    output_dir, dir_err = validate_directory_path(output_dir_raw)
+    if dir_err:
+        return {"success": False, "error": dir_err}
+    assert output_dir is not None
+
+    if not re.match(r"^https://x\.com/[^/]+/status/\d+$", url):
+        return {"success": False, "error": "invalid tweet url"}
+
+    existing = detect_existing_note(url, output_dir)
+    if not existing:
+        log_event("archive_not_found", url=url)
+        return {"success": True, "path": "", "archived": False, "reason": "note not found"}
+
+    now = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    try:
+        text = existing.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return {"success": False, "error": "cannot read existing note"}
+
+    if "archived: true" in text[:2000]:
+        log_event("already_archived", url=url, path=str(existing))
+        return {"success": True, "path": str(existing), "archived": True, "reason": "already archived"}
+
+    updated = re.sub(
+        r"^archived:.*$",
+        "archived: true",
+        text,
+        flags=re.MULTILINE,
+    )
+    if "archived:" not in updated:
+        updated = re.sub(
+            r"(---\n)",
+            "\\1archived: true\n",
+            updated,
+            count=1,
+        )
+
+    updated = re.sub(
+        r"^archived_at:.*$",
+        f"archived_at: \"{now}\"",
+        updated,
+        flags=re.MULTILINE,
+    )
+    if "archived_at:" not in updated:
+        updated = re.sub(
+            r"(archived: true\n)",
+            f"\\1archived_at: \"{now}\"\n",
+            updated,
+            count=1,
+        )
+
+    existing.write_text(updated, encoding="utf-8")
+    log_event("archived", url=url, path=str(existing))
+    return {"success": True, "path": str(existing), "archived": True}
 
 
 def main() -> None:
@@ -456,6 +829,16 @@ def main() -> None:
         if action == "save_x_bookmark":
             payload = message.get("payload", {})
             send_message(save_x_bookmark(payload))
+            return
+
+        if action == "archive_x_bookmark":
+            payload = message.get("payload", {})
+            send_message(archive_x_bookmark(payload))
+            return
+
+        if action == "save_threads_bookmark":
+            payload = message.get("payload", {})
+            send_message(save_threads_bookmark(payload))
             return
 
         send_message({"success": False, "error": f"unknown action: {action}"})
