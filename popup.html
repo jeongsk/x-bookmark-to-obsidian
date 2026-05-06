@@ -20,12 +20,38 @@
           <button id="pick-dir" type="button" class="secondary">폴더 선택</button>
         </div>
         <p id="save-dir-status" class="helper-text">자신의 수집함(Inbox) 디렉토리를 입력하는 것을 권장합니다.</p>
+
+        <label class="field-label" for="filename-template" style="margin-top:12px;">파일명 템플릿</label>
+        <input id="filename-template" class="text-input mono" type="text" placeholder="{title}" />
+        <p class="helper-text">{title} {date} {author} {id} {source} 조합 가능. 예: {date} - {title}</p>
+        <p id="filename-preview" class="helper-text mono"></p>
+
+        <label class="field-label" for="download-media-toggle" style="margin-top:12px;">미디어 파일 로컬 저장</label>
+        <div class="toggle-row">
+          <input id="download-media-toggle" type="checkbox" />
+          <label for="download-media-toggle" class="toggle-label">이미지/비디오를 로컬에 다운로드 (Obsidian 오프라인 표시)</label>
+        </div>
+
+        <label class="field-label" for="default-tags" style="margin-top:12px;">기본 태그</label>
+        <input id="default-tags" class="text-input mono" type="text" placeholder="x-bookmark, tweet" />
+        <p class="helper-text">쉼표로 구분하여 입력하면 모든 노트의 frontmatter에 자동 추가됩니다.</p>
       </section>
 
       <section class="card">
         <h2>실행 상태</h2>
         <p id="native-status">Native Host 확인 중...</p>
         <p id="last-result">최근 저장: 기록 없음</p>
+      </section>
+
+      <section class="card">
+        <h2>오류 로그</h2>
+        <div id="error-log-container">
+          <p id="error-log-empty" class="helper-text">오류 내역이 없습니다.</p>
+          <ul id="error-log-list" class="error-log-list is-hidden"></ul>
+        </div>
+        <div class="button-row">
+          <button id="retry-failed" type="button" class="secondary">실패 항목 재시도</button>
+        </div>
       </section>
 
       <section class="card">

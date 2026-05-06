@@ -16,12 +16,30 @@
   const HUD_ID = "x-bookmark-to-obsidian-hud";
   const ACTIVE_RUN_STORAGE_KEY = "activeRunStatus";
 
+  const VISIBILITY_SCAN_MAX_ARTICLES = 20;
+  const VISIBILITY_SCAN_CAPTURE_LIMIT = 5;
+  const VISIBILITY_HIDDEN_THRESHOLD_MS = 5000;
+  const SOFT_POLL_INTERVAL_MS = 30000;
+
   let syncInFlight = false;
   let clearInFlight = false;
   let hudDismissed = false;
+  let lastHiddenAt = null;
+  let bookmarkObserver = null;
+  let observerPendingArticles = new WeakSet();
+  let softPollTimer = null;
+
+  const API_CACHE_MAX_SIZE = 200;
+  const RECENT_SUCCESS_MAX_SIZE = 100;
+  const apiCache = new Map();
+  const apiCacheOrder = [];
 
   document.addEventListener("click", handleDocumentClick, true);
+  document.addEventListener("visibilitychange", onVisibilityChange);
   hydrateHudFromActiveRun();
+  startBookmarkObserver();
+  startSoftPoll();
+  interceptFetch();
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type === "START_BOOKMARK_PAGE_SYNC") {
@@ -60,16 +78,19 @@
     }
 
     const testId = bookmarkButton.getAttribute("data-testid");
-    if (testId !== "bookmark") {
-      return;
-    }
-
     const article = bookmarkButton.closest('article[data-testid="tweet"]');
     if (!article) {
       return;
     }
 
-    window.setTimeout(() => maybeCaptureBookmark(article), CONFIRM_DELAY_MS);
+    if (testId === "removeBookmark") {
+      window.setTimeout(() => maybeArchiveBookmark(article), CONFIRM_DELAY_MS);
+      return;
+    }
+
+    if (testId === "bookmark") {
+      window.setTimeout(() => maybeCaptureBookmark(article), CONFIRM_DELAY_MS);
+    }
   }
 
   async function maybeCaptureBookmark(article) {
@@ -95,6 +116,29 @@
       }
     } catch (error) {
       showToast("저장 실패: " + normalizeErrorMessage(error), "error");
+    }
+  }
+
+  async function maybeArchiveBookmark(article) {
+    const addBookmarkButton = article.querySelector('[data-testid="bookmark"]');
+    if (!addBookmarkButton) {
+      return;
+    }
+
+    const payload = extractTweetPayload(article);
+    if (!payload?.url) {
+      return;
+    }
+
+    try {
+      const response = await sendRuntimeMessage({ type: "ARCHIVE_X_BOOKMARK", payload });
+      if (response?.success) {
+        showToast("북마크가 보관 처리되었습니다.", "success");
+      } else {
+        showToast("보관 처리 실패: " + (response?.error || "알 수 없는 오류"), "error");
+      }
+    } catch (error) {
+      showToast("보관 처리 실패: " + normalizeErrorMessage(error), "error");
     }
   }
 
@@ -427,8 +471,8 @@
   }
 
   async function savePayload(payload, options) {
-    cleanupMap(PENDING_BY_URL, PENDING_TTL_MS);
-    cleanupMap(RECENT_SUCCESS, RECENT_TTL_MS);
+    cleanupMap(PENDING_BY_URL, PENDING_TTL_MS, 50);
+    cleanupMap(RECENT_SUCCESS, RECENT_TTL_MS, RECENT_SUCCESS_MAX_SIZE);
 
     if (PENDING_BY_URL.has(payload.url) || RECENT_SUCCESS.has(payload.url)) {
       return { deduped: true, skippedRecent: true };
@@ -462,17 +506,37 @@
 
     const url = normalizeStatusUrl(statusLink?.href || statusLink?.getAttribute("href") || "", authorHandle);
     const tweetIdMatch = url.match(/status\/(\d+)/);
+    const tweetId = tweetIdMatch ? tweetIdMatch[1] : "";
+
+    const cached = tweetId ? getCachedTweetData(tweetId) : null;
+    const enrichedText = cached?.full_text || text;
+    const enrichedMetrics = cached?.metrics
+      ? { ...metrics, ...cached.metrics }
+      : metrics;
+    const enrichedAuthor = cached?.author
+      ? cached.author.name || authorName
+      : authorName;
+    const publishedAt = cached?.created_at || timeEl?.getAttribute("datetime") || "";
+
+    const contentHash = simpleHash([
+      enrichedText,
+      enrichedAuthor,
+      authorHandle,
+      enrichedMetrics.replies || enrichedMetrics.reposts,
+      enrichedMetrics.likes,
+    ].join("|"));
 
     return {
       url,
-      tweet_id: tweetIdMatch ? tweetIdMatch[1] : "",
+      tweet_id: tweetId,
       author_handle: authorHandle,
-      author_name: authorName,
-      text,
-      published_at: timeEl?.getAttribute("datetime") || "",
+      author_name: enrichedAuthor,
+      text: enrichedText,
+      published_at: publishedAt,
       captured_at: new Date().toISOString(),
       source: "x-bookmark-click",
-      metrics,
+      metrics: enrichedMetrics,
+      content_hash: contentHash,
     };
   }
 
@@ -597,11 +661,20 @@
     return null;
   }
 
-  function cleanupMap(map, ttlMs) {
+  function cleanupMap(map, ttlMs, maxSize) {
     const now = Date.now();
     for (const [key, value] of map.entries()) {
       if (now - value > ttlMs) {
         map.delete(key);
+      }
+    }
+    if (maxSize && map.size > maxSize) {
+      const excess = map.size - maxSize;
+      let removed = 0;
+      for (const key of map.keys()) {
+        if (removed >= excess) break;
+        map.delete(key);
+        removed++;
       }
     }
   }
@@ -952,8 +1025,234 @@
     errorEl.textContent = status.latestError ? `최근 오류: ${status.latestError}` : "";
   }
 
+  function startSoftPoll() {
+    if (!isBookmarksPage()) return;
+    if (softPollTimer) return;
+
+    softPollTimer = setInterval(async () => {
+      if (syncInFlight || clearInFlight) return;
+      if (document.visibilityState === "hidden") return;
+      await scanForNewBookmarks();
+    }, SOFT_POLL_INTERVAL_MS);
+  }
+
+  function interceptFetch() {
+    const originalFetch = window.fetch;
+    window.fetch = function (resource, init) {
+      const promise = originalFetch.call(this, resource, init);
+      const url = typeof resource === "string" ? resource : resource?.url || "";
+
+      if (/graphql\/(?:Bookmarks|TweetDetail|HomeTimeline|UserTweets)/.test(url)) {
+        promise.then(async (response) => {
+          try {
+            const cloned = response.clone();
+            const json = await cloned.json();
+            cacheApiResponse(json);
+          } catch (_e) {
+            // 응답 파싱 실패는 무시.
+          }
+        }).catch(() => {});
+      }
+
+      return promise;
+    };
+  }
+
+  function lruTouch(map, order, key, maxSize) {
+    const idx = order.indexOf(key);
+    if (idx > -1) order.splice(idx, 1);
+    order.push(key);
+    while (order.length > maxSize) {
+      const evicted = order.shift();
+      if (evicted) map.delete(evicted);
+    }
+  }
+
+  function cacheApiResponse(json) {
+    const entries = extractEntries(json);
+    for (const entry of entries) {
+      const result = entry?.content?.itemContent?.tweet_results?.result;
+      const tweet = result?.tweet || result;
+      if (!tweet?.legacy) continue;
+
+      const tweetId = tweet.legacy.id_str || tweet.rest_id;
+      if (!tweetId) continue;
+
+      apiCache.set(tweetId, {
+        full_text: tweet.legacy.full_text,
+        created_at: tweet.legacy.created_at,
+        media: tweet.legacy.extended_entities?.media || tweet.legacy.entities?.media,
+        metrics: {
+          likes: tweet.legacy.favorite_count,
+          retweets: tweet.legacy.retweet_count,
+          views: result?.views?.count,
+          replies: tweet.legacy.reply_count,
+          bookmarks: tweet.legacy.bookmark_count,
+        },
+        author: tweet.core?.user_results?.result?.legacy,
+      });
+      lruTouch(apiCache, apiCacheOrder, tweetId, API_CACHE_MAX_SIZE);
+    }
+  }
+
+  function extractEntries(json, depth = 0) {
+    if (!json || depth > 8) return [];
+    const results = [];
+    if (Array.isArray(json)) {
+      for (const item of json) {
+        results.push(...extractEntries(item, depth + 1));
+      }
+    } else if (typeof json === "object") {
+      if (json.entryId && json.content) {
+        results.push(json);
+      }
+      for (const value of Object.values(json)) {
+        results.push(...extractEntries(value, depth + 1));
+      }
+    }
+    return results;
+  }
+
+  function getCachedTweetData(tweetId) {
+    return apiCache.get(tweetId) || null;
+  }
+
+  function startBookmarkObserver() {
+    if (!isBookmarksPage()) return;
+
+    bookmarkObserver = new MutationObserver((mutations) => {
+      const newArticles = [];
+      for (const mutation of mutations) {
+        for (const node of mutation.addedNodes) {
+          if (node.nodeType !== Node.ELEMENT_NODE) continue;
+          const articles = node.matches?.('article[data-testid="tweet"]')
+            ? [node]
+            : node.querySelectorAll?.('article[data-testid="tweet"]') || [];
+          for (const article of articles) {
+            if (!observerPendingArticles.has(article)) {
+              newArticles.push(article);
+            }
+          }
+        }
+      }
+      if (newArticles.length > 0) {
+        handleObserverArticles(newArticles);
+      }
+    });
+
+    bookmarkObserver.observe(document.body, { childList: true, subtree: true });
+  }
+
+  async function handleObserverArticles(articles) {
+    for (const article of articles) {
+      observerPendingArticles.add(article);
+    }
+
+    let captured = 0;
+    for (const article of articles) {
+      const bookmarkButton = article.querySelector('[data-testid="removeBookmark"]');
+      if (!bookmarkButton) continue;
+
+      const payload = extractTweetPayload(article);
+      if (!payload?.url) continue;
+
+      if (RECENT_SUCCESS.has(payload.url) || PENDING_BY_URL.has(payload.url)) continue;
+
+      if (captured >= VISIBILITY_SCAN_CAPTURE_LIMIT) break;
+
+      PENDING_BY_URL.set(payload.url, Date.now());
+      try {
+        const result = await savePayload(payload, { showStartToast: false });
+        if (result && !result.deduped) {
+          captured += 1;
+        }
+      } catch (_error) {
+        // 개별 저장 실패는 조용히 건너뛴다.
+      } finally {
+        PENDING_BY_URL.delete(payload.url);
+      }
+    }
+  }
+
+  async function onVisibilityChange() {
+    if (document.visibilityState === "hidden") {
+      lastHiddenAt = Date.now();
+      return;
+    }
+
+    if (!isBookmarksPage()) {
+      return;
+    }
+
+    hydrateHudFromActiveRun();
+
+    if (!lastHiddenAt || Date.now() - lastHiddenAt < VISIBILITY_HIDDEN_THRESHOLD_MS) {
+      return;
+    }
+
+    if (syncInFlight || clearInFlight) {
+      return;
+    }
+
+    await scanForNewBookmarks();
+  }
+
+  async function scanForNewBookmarks() {
+    const articles = document.querySelectorAll('article[data-testid="tweet"]');
+    let captured = 0;
+
+    let scanned = 0;
+    for (const article of articles) {
+      if (captured >= VISIBILITY_SCAN_CAPTURE_LIMIT || scanned >= VISIBILITY_SCAN_MAX_ARTICLES) {
+        break;
+      }
+      scanned += 1;
+
+      const bookmarkButton = article.querySelector('[data-testid="removeBookmark"]');
+      if (!bookmarkButton) {
+        continue;
+      }
+
+      const payload = extractTweetPayload(article);
+      if (!payload?.url) {
+        continue;
+      }
+
+      if (RECENT_SUCCESS.has(payload.url) || PENDING_BY_URL.has(payload.url)) {
+        continue;
+      }
+
+      PENDING_BY_URL.set(payload.url, Date.now());
+
+      try {
+        const result = await savePayload(payload, { showStartToast: false });
+        if (result && !result.deduped) {
+          captured += 1;
+        }
+      } catch (_error) {
+        // 개별 저장 실패는 조용히 건너뛴다.
+      } finally {
+        PENDING_BY_URL.delete(payload.url);
+      }
+    }
+
+    if (captured > 0) {
+      showToast(`${captured}개의 새 북마크를 발견하여 저장했습니다.`, "success");
+    }
+  }
+
   function delay(ms) {
     return new Promise((resolve) => window.setTimeout(resolve, ms));
+  }
+
+  function simpleHash(str) {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      const char = str.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash |= 0;
+    }
+    return hash.toString(16);
   }
 
   function sendRuntimeMessage(message) {

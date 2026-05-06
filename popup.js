@@ -18,7 +18,16 @@ document.addEventListener("DOMContentLoaded", async () => {
   const clearPromptEl = document.getElementById("clear-prompt");
   const clearBookmarksBtn = document.getElementById("clear-bookmarks");
   const clearStatusEl = document.getElementById("clear-status");
+  const errorLogEmptyEl = document.getElementById("error-log-empty");
+  const errorLogListEl = document.getElementById("error-log-list");
+  const retryFailedBtn = document.getElementById("retry-failed");
+  const filenameTemplateEl = document.getElementById("filename-template");
+  const filenamePreviewEl = document.getElementById("filename-preview");
+  const downloadMediaToggleEl = document.getElementById("download-media-toggle");
+  const defaultTagsEl = document.getElementById("default-tags");
+  const DEFAULT_FILENAME_TEMPLATE = "{title}";
   let targetSyncCountDirty = false;
+  let filenameTemplateDirty = false;
   const clearActionRefs = {
     container: clearActionEl,
     prompt: clearPromptEl,
@@ -29,9 +38,16 @@ document.addEventListener("DOMContentLoaded", async () => {
   const syncState = await chrome.storage.sync.get({
     obsidianOutputDir: DEFAULT_OUTPUT_DIR,
     targetSyncCount: DEFAULT_TARGET_SYNC_COUNT,
+    filenameTemplate: DEFAULT_FILENAME_TEMPLATE,
+    downloadMedia: false,
+    defaultTags: "",
   });
   outputDirEl.value = syncState.obsidianOutputDir || "";
   targetSyncCountEl.value = sanitizeNumber(syncState.targetSyncCount, 1, 200, DEFAULT_TARGET_SYNC_COUNT);
+  filenameTemplateEl.value = syncState.filenameTemplate || DEFAULT_FILENAME_TEMPLATE;
+  downloadMediaToggleEl.checked = !!syncState.downloadMedia;
+  defaultTagsEl.value = syncState.defaultTags || "";
+  updateFilenamePreview();
 
   try {
     const nativeStatus = await sendMessage({ type: "PING_NATIVE_HOST" });
@@ -54,6 +70,29 @@ document.addEventListener("DOMContentLoaded", async () => {
     await chrome.storage.sync.set({ targetSyncCount });
     targetSyncCountDirty = false;
     saveDirStatusEl.textContent = "목표 동기화 개수가 업데이트되었습니다.";
+  });
+
+  filenameTemplateEl.addEventListener("input", () => {
+    filenameTemplateDirty = true;
+    updateFilenamePreview();
+  });
+
+  filenameTemplateEl.addEventListener("change", async () => {
+    const template = filenameTemplateEl.value.trim() || DEFAULT_FILENAME_TEMPLATE;
+    filenameTemplateEl.value = template;
+    await chrome.storage.sync.set({ filenameTemplate: template });
+    filenameTemplateDirty = false;
+    updateFilenamePreview();
+  });
+
+  downloadMediaToggleEl.addEventListener("change", async () => {
+    await chrome.storage.sync.set({ downloadMedia: downloadMediaToggleEl.checked });
+  });
+
+  defaultTagsEl.addEventListener("change", async () => {
+    const tags = defaultTagsEl.value.trim();
+    await chrome.storage.sync.set({ defaultTags: tags });
+    saveDirStatusEl.textContent = "기본 태그가 업데이트되었습니다.";
   });
 
   saveDirBtn.addEventListener("click", async () => {
@@ -151,6 +190,23 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   });
 
+  retryFailedBtn.addEventListener("click", async () => {
+    retryFailedBtn.disabled = true;
+    try {
+      const response = await sendMessage({ type: "RETRY_FAILED_ITEMS" });
+      if (response?.success) {
+        saveDirStatusEl.textContent = `재시도 완료: ${response.result?.processed || 0}건 처리됨`;
+      } else {
+        saveDirStatusEl.textContent = "재시도 실패: " + (response?.error || "알 수 없는 오류");
+      }
+      await refreshStatus();
+    } catch (error) {
+      saveDirStatusEl.textContent = "재시도 실패: " + (error?.message || "알 수 없는 오류");
+    } finally {
+      retryFailedBtn.disabled = false;
+    }
+  });
+
   async function refreshStatus() {
     try {
       const status = await sendMessage({ type: "GET_STATUS" });
@@ -177,6 +233,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       renderSyncStatus(syncStatusEl, activeRun, lastSync);
       renderLastSyncResult(syncLastResultEl, lastSync);
       renderClearAction(clearActionRefs, lastSync, activeRun);
+      await renderErrorLog();
       syncBookmarksBtn.disabled = !!activeRun?.isRunning;
       clearBookmarksBtn.disabled = !!activeRun?.isRunning;
     } catch (_error) {
@@ -210,6 +267,56 @@ function sanitizeNumber(value, min, max, fallback) {
     return fallback;
   }
   return Math.min(max, Math.max(min, Math.floor(parsed)));
+}
+
+async function renderErrorLog() {
+  try {
+    const response = await sendMessage({ type: "GET_RETRY_QUEUE" });
+    const items = response?.items || [];
+    const failed = items
+      .filter((item) => item.status === "failed")
+      .sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""))
+      .slice(0, 10);
+
+    if (failed.length === 0) {
+      errorLogEmptyEl.classList.remove("is-hidden");
+      errorLogListEl.classList.add("is-hidden");
+      retryFailedBtn.classList.add("is-hidden");
+      return;
+    }
+
+    errorLogEmptyEl.classList.add("is-hidden");
+    errorLogListEl.classList.remove("is-hidden");
+    retryFailedBtn.classList.remove("is-hidden");
+
+    errorLogListEl.innerHTML = "";
+    for (const item of failed) {
+      const li = document.createElement("li");
+      li.className = "error-log-item";
+
+      const urlDiv = document.createElement("div");
+      urlDiv.className = "error-log-url";
+      urlDiv.textContent = truncateUrl(item.payload?.url || "", 55);
+
+      const reasonDiv = document.createElement("div");
+      reasonDiv.className = "error-log-reason";
+      reasonDiv.textContent = item.lastError || "알 수 없는 오류";
+
+      const timeDiv = document.createElement("div");
+      timeDiv.className = "error-log-time";
+      timeDiv.textContent = item.updatedAt
+        ? new Date(item.updatedAt).toLocaleString("ko-KR", { hour12: false })
+        : "";
+
+      li.appendChild(urlDiv);
+      li.appendChild(reasonDiv);
+      li.appendChild(timeDiv);
+      errorLogListEl.appendChild(li);
+    }
+  } catch (_error) {
+    errorLogEmptyEl.classList.remove("is-hidden");
+    errorLogListEl.classList.add("is-hidden");
+  }
 }
 
 function renderSyncStatus(target, activeRun, lastSync) {
@@ -362,6 +469,24 @@ function describeClearStopReason(reason) {
     return "내부 스크롤 상한에 도달했습니다. 아직 재배치되지 않은 북마크가 있을 수 있습니다";
   }
   return "중지됨";
+}
+
+function updateFilenamePreview() {
+  const template = filenameTemplateEl.value.trim() || DEFAULT_FILENAME_TEMPLATE;
+  const now = new Date();
+  const sample = template
+    .replace(/\{title\}/g, "게시글 제목")
+    .replace(/\{date\}/g, now.toISOString().slice(0, 10))
+    .replace(/\{author\}/g, "authorhandle")
+    .replace(/\{id\}/g, "1234567890")
+    .replace(/\{source\}/g, "x-bookmark");
+  filenamePreviewEl.textContent = "미리보기: " + sample + ".md";
+}
+
+function truncateUrl(url, maxLength) {
+  if (!url) return "";
+  if (url.length <= maxLength) return url;
+  return url.slice(0, maxLength - 3) + "...";
 }
 
 function getClearCandidateCount(primary, fallback) {

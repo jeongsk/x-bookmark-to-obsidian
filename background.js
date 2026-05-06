@@ -1,9 +1,14 @@
 const NATIVE_HOST_NAME = "com.btl.file_writer";
 const DEFAULT_OUTPUT_DIR = "";
+const DEFAULT_FILENAME_TEMPLATE = "{title}";
 const DEFAULT_TARGET_SYNC_COUNT = 80;
 const DEFAULT_SYNC_MAX_ROUNDS = 18;
 const INSTALL_HINT = "로컬 설치가 완료되지 않았습니다. install.command를 먼저 실행한 후 다시 시도하세요.";
 const ACTIVE_RUN_STORAGE_KEY = "activeRunStatus";
+const RETRY_QUEUE_KEY = "retryQueue";
+const MAX_RETRY_COUNT = 4;
+const RETRY_BACKOFF_MS = [1000, 2000, 4000, 8000];
+const RETRY_ALARM_NAME = "retryQueueAlarm";
 
 chrome.runtime.onInstalled.addListener(async () => {
   const syncState = await chrome.storage.sync.get({
@@ -20,6 +25,13 @@ chrome.runtime.onInstalled.addListener(async () => {
     obsidianOutputDir: syncState.obsidianOutputDir || DEFAULT_OUTPUT_DIR,
     targetSyncCount: sanitizeNumber(syncState.targetSyncCount, 1, 200, DEFAULT_TARGET_SYNC_COUNT),
   });
+  restoreRetryQueue();
+});
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === RETRY_ALARM_NAME) {
+    processRetryQueue();
+  }
 });
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -116,6 +128,42 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       .catch((error) => sendResponse({ success: false, error: mapNativeHostError(error) }));
     return true;
   }
+
+  if (message?.type === "RETRY_FAILED_ITEMS") {
+    processRetryQueue()
+      .then((result) => sendResponse({ success: true, result }))
+      .catch((error) => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
+
+  if (message?.type === "ARCHIVE_X_BOOKMARK") {
+    handleArchiveBookmark(message.payload)
+      .then((result) => sendResponse({ success: true, result }))
+      .catch((error) => sendResponse({ success: false, error: error.message || "보관 처리 실패" }));
+    return true;
+  }
+
+  if (message?.type === "GET_RETRY_QUEUE") {
+    chrome.storage.local.get({ [RETRY_QUEUE_KEY]: [] }).then((state) => {
+      sendResponse({ success: true, items: state[RETRY_QUEUE_KEY] || [] });
+    });
+    return true;
+  }
+
+  if (message?.type === "SAVE_THREADS_BOOKMARK") {
+    handleSaveThreadsBookmark(message.payload)
+      .then((result) => sendResponse({ success: true, result }))
+      .catch((error) => {
+        const failure = {
+          ok: false,
+          error: error.message || "알 수 없는 오류",
+          timestamp: Date.now(),
+        };
+        chrome.storage.local.set({ lastResult: failure });
+        sendResponse({ success: false, error: failure.error, result: failure });
+      });
+    return true;
+  }
 });
 
 async function handleSaveBookmark(payload) {
@@ -123,8 +171,14 @@ async function handleSaveBookmark(payload) {
   validatePayload(safePayload);
   const syncState = await chrome.storage.sync.get({
     obsidianOutputDir: DEFAULT_OUTPUT_DIR,
+    filenameTemplate: DEFAULT_FILENAME_TEMPLATE,
+    downloadMedia: false,
+    defaultTags: "",
   });
   safePayload.output_dir = (syncState.obsidianOutputDir || DEFAULT_OUTPUT_DIR).trim();
+  safePayload.filename_template = (syncState.filenameTemplate || DEFAULT_FILENAME_TEMPLATE).trim();
+  safePayload.download_media = !!syncState.downloadMedia;
+  safePayload.default_tags = (syncState.defaultTags || "").trim();
 
   if (!safePayload.output_dir) {
     throw new Error("먼저 플러그인 팝업에서 Obsidian 저장 경로를 설정하세요.");
@@ -141,7 +195,11 @@ async function handleSaveBookmark(payload) {
   }
 
   if (!result?.success) {
-    throw new Error(result?.error || INSTALL_HINT);
+    const errorMsg = result?.error || INSTALL_HINT;
+    if (!isPermissionError(errorMsg)) {
+      await enqueueRetryItem(safePayload);
+    }
+    throw new Error(errorMsg);
   }
 
   const persisted = {
@@ -156,6 +214,101 @@ async function handleSaveBookmark(payload) {
   };
   await chrome.storage.local.set({ lastResult: persisted });
   return persisted;
+}
+
+async function handleArchiveBookmark(payload) {
+  const safePayload = sanitizePayload(payload);
+  validatePayload(safePayload);
+  const syncState = await chrome.storage.sync.get({
+    obsidianOutputDir: DEFAULT_OUTPUT_DIR,
+    filenameTemplate: DEFAULT_FILENAME_TEMPLATE,
+    downloadMedia: false,
+    defaultTags: "",
+  });
+  safePayload.output_dir = (syncState.obsidianOutputDir || DEFAULT_OUTPUT_DIR).trim();
+  safePayload.filename_template = (syncState.filenameTemplate || DEFAULT_FILENAME_TEMPLATE).trim();
+  safePayload.download_media = !!syncState.downloadMedia;
+  safePayload.default_tags = (syncState.defaultTags || "").trim();
+
+  if (!safePayload.output_dir) {
+    throw new Error("먼저 플러그인 팝업에서 Obsidian 저장 경로를 설정하세요.");
+  }
+
+  let result;
+  try {
+    result = await chrome.runtime.sendNativeMessage(NATIVE_HOST_NAME, {
+      action: "archive_x_bookmark",
+      payload: safePayload,
+    });
+  } catch (error) {
+    throw new Error(mapNativeHostError(error));
+  }
+
+  if (!result?.success) {
+    throw new Error(result?.error || INSTALL_HINT);
+  }
+
+  return result;
+}
+
+async function handleSaveThreadsBookmark(payload) {
+  const safePayload = sanitizePayload(payload);
+  validateThreadsPayload(safePayload);
+  const syncState = await chrome.storage.sync.get({
+    obsidianOutputDir: DEFAULT_OUTPUT_DIR,
+    filenameTemplate: DEFAULT_FILENAME_TEMPLATE,
+    downloadMedia: false,
+    defaultTags: "",
+  });
+  safePayload.output_dir = (syncState.obsidianOutputDir || DEFAULT_OUTPUT_DIR).trim();
+  safePayload.filename_template = (syncState.filenameTemplate || DEFAULT_FILENAME_TEMPLATE).trim();
+  safePayload.download_media = !!syncState.downloadMedia;
+  safePayload.default_tags = (syncState.defaultTags || "").trim();
+  safePayload.source = safePayload.source || "threads-bookmark-click";
+
+  if (!safePayload.output_dir) {
+    throw new Error("먼저 플러그인 팝업에서 Obsidian 저장 경로를 설정하세요.");
+  }
+
+  let result;
+  try {
+    result = await chrome.runtime.sendNativeMessage(NATIVE_HOST_NAME, {
+      action: "save_threads_bookmark",
+      payload: safePayload,
+    });
+  } catch (error) {
+    throw new Error(mapNativeHostError(error));
+  }
+
+  if (!result?.success) {
+    const errorMsg = result?.error || INSTALL_HINT;
+    if (!isPermissionError(errorMsg)) {
+      await enqueueRetryItem(safePayload);
+    }
+    throw new Error(errorMsg);
+  }
+
+  const persisted = {
+    ok: true,
+    timestamp: Date.now(),
+    url: safePayload.url,
+    path: result.path,
+    deduped: !!result.deduped,
+    fallbackUsed: !!result.fallback_used,
+    fetchStatus: result.fetch_status || "unknown",
+    noteTitle: result.note_title || "",
+  };
+  await chrome.storage.local.set({ lastResult: persisted });
+  return persisted;
+}
+
+function validateThreadsPayload(payload) {
+  if (!payload || typeof payload !== "object") {
+    throw new Error("페이로드 누락");
+  }
+  if (typeof payload.url !== "string" || !/^https:\/\/www\.threads\.net\/@[\w.]+\/post\/[A-Za-z0-9_-]+/.test(payload.url)) {
+    throw new Error("유효하지 않은 Threads URL");
+  }
 }
 
 async function startBookmarkPageSync(options) {
@@ -324,6 +477,7 @@ function sanitizePayload(payload) {
     published_at: String(payload?.published_at || ""),
     captured_at: String(payload?.captured_at || ""),
     source: "x-bookmark-click",
+    content_hash: String(payload?.content_hash || ""),
     metrics: {
       likes: String(metrics.likes || ""),
       reposts: String(metrics.reposts || ""),
@@ -423,4 +577,149 @@ function estimateMaxRounds(targetItems) {
 
 function estimateClearRounds(pendingItems) {
   return sanitizeNumber(Math.ceil(pendingItems / 4) + 6, 8, 40, 12);
+}
+
+async function enqueueRetryItem(payload) {
+  const state = await chrome.storage.local.get({ [RETRY_QUEUE_KEY]: [] });
+  const queue = state[RETRY_QUEUE_KEY] || [];
+
+  const alreadyQueued = queue.some(
+    (item) => item.url === payload.url && item.status === "pending"
+  );
+  if (alreadyQueued) {
+    return;
+  }
+
+  queue.push({
+    queueId: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    payload,
+    action: "create",
+    status: "pending",
+    retryCount: 0,
+    nextRetryAt: Date.now() + RETRY_BACKOFF_MS[0],
+    lastError: "",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  });
+
+  await chrome.storage.local.set({ [RETRY_QUEUE_KEY]: queue });
+  scheduleRetryAlarm();
+}
+
+async function processRetryQueue() {
+  const state = await chrome.storage.local.get({ [RETRY_QUEUE_KEY]: [] });
+  const queue = state[RETRY_QUEUE_KEY] || [];
+  if (queue.length === 0) {
+    return { processed: 0, remaining: 0 };
+  }
+
+  const syncState = await chrome.storage.sync.get({
+    obsidianOutputDir: DEFAULT_OUTPUT_DIR,
+    filenameTemplate: DEFAULT_FILENAME_TEMPLATE,
+    downloadMedia: false,
+    defaultTags: "",
+  });
+  const outputDir = (syncState.obsidianOutputDir || DEFAULT_OUTPUT_DIR).trim();
+  if (!outputDir) {
+    return { processed: 0, remaining: queue.length, error: "저장 경로가 설정되지 않았습니다" };
+  }
+
+  const now = Date.now();
+  let processed = 0;
+
+  for (const item of queue) {
+    if (item.status !== "pending") {
+      continue;
+    }
+    if (item.nextRetryAt && now < item.nextRetryAt) {
+      continue;
+    }
+
+    item.status = "processing";
+    item.updatedAt = new Date().toISOString();
+    await chrome.storage.local.set({ [RETRY_QUEUE_KEY]: queue });
+
+    try {
+      const payload = {
+        ...item.payload,
+        output_dir: outputDir,
+        filename_template: (syncState.filenameTemplate || DEFAULT_FILENAME_TEMPLATE).trim(),
+        download_media: !!syncState.downloadMedia,
+        default_tags: (syncState.defaultTags || "").trim(),
+      };
+      const result = await chrome.runtime.sendNativeMessage(NATIVE_HOST_NAME, {
+        action: "save_x_bookmark",
+        payload,
+      });
+
+      if (result?.success) {
+        item.status = "completed";
+        processed += 1;
+      } else if (isPermissionError(result?.error || "")) {
+        item.status = "failed";
+        item.lastError = result?.error || INSTALL_HINT;
+        item.updatedAt = new Date().toISOString();
+      } else {
+        item.retryCount += 1;
+        if (item.retryCount >= MAX_RETRY_COUNT) {
+          item.status = "failed";
+          item.lastError = result?.error || INSTALL_HINT;
+        } else {
+          item.status = "pending";
+          item.nextRetryAt = now + RETRY_BACKOFF_MS[Math.min(item.retryCount, RETRY_BACKOFF_MS.length - 1)];
+          item.lastError = result?.error || INSTALL_HINT;
+        }
+        item.updatedAt = new Date().toISOString();
+      }
+    } catch (error) {
+      const errorMsg = mapNativeHostError(error);
+      item.retryCount += 1;
+      if (item.retryCount >= MAX_RETRY_COUNT || isPermissionError(errorMsg)) {
+        item.status = "failed";
+      } else {
+        item.status = "pending";
+        item.nextRetryAt = now + RETRY_BACKOFF_MS[Math.min(item.retryCount, RETRY_BACKOFF_MS.length - 1)];
+      }
+      item.lastError = errorMsg;
+      item.updatedAt = new Date().toISOString();
+    }
+
+    await chrome.storage.local.set({ [RETRY_QUEUE_KEY]: queue });
+  }
+
+  const remaining = queue.filter((item) => item.status === "pending").length;
+  if (remaining > 0) {
+    scheduleRetryAlarm();
+  }
+
+  return { processed, remaining };
+}
+
+function scheduleRetryAlarm() {
+  chrome.alarms.get(RETRY_ALARM_NAME, (existing) => {
+    if (!existing) {
+      chrome.alarms.create(RETRY_ALARM_NAME, { delayInMinutes: 0.5 });
+    }
+  });
+}
+
+async function restoreRetryQueue() {
+  const state = await chrome.storage.local.get({ [RETRY_QUEUE_KEY]: [] });
+  const queue = state[RETRY_QUEUE_KEY] || [];
+  const pending = queue.filter((item) => item.status === "pending");
+  if (pending.length > 0) {
+    scheduleRetryAlarm();
+  }
+}
+
+function isPermissionError(errorMsg) {
+  const msg = String(errorMsg || "").toLowerCase();
+  return (
+    msg.includes("permission") ||
+    msg.includes("denied") ||
+    msg.includes("not found") ||
+    msg.includes("forbidden") ||
+    msg.includes("권한") ||
+    msg.includes("invalid directory")
+  );
 }
